@@ -12,6 +12,23 @@ import os
 import shutil
 import io
 import matplotlib.pyplot as plt
+import base64
+
+# ==============================================================================
+# WATERMARK & LOGO LOCALE
+# ==============================================================================
+LOGO_FILENAME = "logoft.png"
+
+
+def get_base64_image(image_path):
+    if os.path.exists(image_path):
+        with open(image_path, "rb") as img_file:
+            return f"data:image/png;base64,{base64.b64encode(img_file.read()).decode()}"
+    return "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
+
+
+WATERMARK_URL = get_base64_image(LOGO_FILENAME)
+LOGO_URL = WATERMARK_URL
 
 
 # ==============================================================================
@@ -117,7 +134,7 @@ def generate_filename(year, event_name, is_test, test_number, day_str, plot_name
 
 
 # ==============================================================================
-# 1. CONFIGURAZIONE & STILE
+# 1. CONFIGURAZIONE E STILE
 # ==============================================================================
 st.set_page_config(
     page_title="F1 PITWALL PRO - 2026",
@@ -143,8 +160,6 @@ if st.sidebar.button("🧹 Clear Cache & Reset", help="Clicca per eliminare down
         st.sidebar.error(f"Errore cache: {e}")
 
 fastf1.Cache.enable_cache(CACHE_DIR)
-
-LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/1200px-F1.svg.png"
 
 st.markdown("""
 <style>
@@ -269,7 +284,9 @@ def get_weather_history(session):
 # 4. UI & SIDEBAR
 # ==============================================================================
 with st.sidebar:
-    st.image(LOGO_URL, width=80)
+    # AUMENTATA LA DIMENSIONE DEL LOGO NELLA BARRA LATERALE a 180px
+    st.markdown(f'<img src="{LOGO_URL}" width="180">', unsafe_allow_html=True)
+    st.write("")  # Spazio vuoto
     st.header("1. SESSIONE (FASTF1)")
 
     sel_year = st.selectbox("Anno", [2026, 2025, 2024], index=0)
@@ -371,6 +388,7 @@ with st.sidebar:
         "CIRCLE",
         "TIRE DEGRADATION",
         "SIMULAZIONE PASSO GARA",
+        "AVG TELEMETRY-SIM PASSO",
         "PASSO GARA",
         "RACE TRACE",
         "MICROSECTORS MAP",
@@ -393,72 +411,94 @@ with st.sidebar:
     sel_drivers = st.multiselect("Piloti", available_drivers, default=default_drivers)
     custom_colors = {d: DRIVER_COLORS.get(d, '#FFFFFF') for d in sel_drivers}
 
-    # --- SEZIONE 4. TRACK ---
-    st.header("4. TRACK")
-    if st.session_state['session_loaded'] and tool != "MICROSECTORS MAP":
-        try:
-            with st.spinner("Generazione mappa..."):
-                sess = st.session_state['session_loaded']
-                fastest_lap = sess.laps.pick_fastest()
 
-                if pd.notna(fastest_lap.get('LapTime')):
-                    tel = fastest_lap.get_telemetry()
+# ==============================================================================
+# FUNZIONI HELPER PER TITOLO E WATERMARK
+# ==============================================================================
+def get_chart_title(tool_name):
+    return f"{sel_year} {sel_event_label} {sel_session_display} | {tool_name} - @FormulaTecnica"
 
-                    try:
-                        circuit_info = sess.get_circuit_info()
-                        corners = circuit_info.corners
-                    except:
-                        corners = pd.DataFrame()
 
-                    fig_track = go.Figure()
+def get_watermark():
+    # AUMENTATA DIMENSIONE WATERMARK NEI GRAFICI (sizex e sizey da 0.10 a 0.20)
+    return [dict(
+        source=WATERMARK_URL,
+        xref="paper", yref="paper",
+        x=1.0, y=1.08,
+        sizex=0.20, sizey=0.20,
+        xanchor="right", yanchor="bottom"
+    )]
 
-                    fig_track.add_trace(go.Scatter(
-                        x=tel['X'], y=tel['Y'],
-                        mode='markers',
-                        marker=dict(
-                            size=4,
-                            color=tel['Speed'],
-                            colorscale='inferno',
-                            showscale=False
-                        ),
-                        hoverinfo='skip'
-                    ))
 
-                    if not corners.empty and 'X' in corners.columns and 'Y' in corners.columns:
-                        for _, corner in corners.iterrows():
-                            c_num = str(corner.get('Number', '')).replace('.0', '')
-                            c_let = str(corner.get('Letter', '')).replace('nan', '')
+# --- SEZIONE 4. TRACK ---
+st.header("4. TRACK")
+if st.session_state['session_loaded'] and tool != "MICROSECTORS MAP":
+    try:
+        with st.spinner("Generazione mappa..."):
+            sess = st.session_state['session_loaded']
+            fastest_lap = sess.laps.pick_fastest()
 
-                            fig_track.add_annotation(
-                                x=corner['X'], y=corner['Y'],
-                                text=f"{c_num}{c_let}",
-                                showarrow=False,
-                                font=dict(color='white', size=11, family="Anton"),
-                                bgcolor="#FF2800",
-                                borderpad=2,
-                                bordercolor="white",
-                                borderwidth=1
-                            )
+            if pd.notna(fastest_lap.get('LapTime')):
+                tel = fastest_lap.get_telemetry()
 
-                    fig_track.update_layout(
-                        template="plotly_dark",
-                        paper_bgcolor='#0f0f0f',
-                        plot_bgcolor='#0f0f0f',
-                        margin=dict(l=0, r=0, t=0, b=0),
-                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1),
-                        height=280
-                    )
-                    st.plotly_chart(fig_track, use_container_width=True)
-                    st.markdown(
-                        "<div style='font-size:12px; color:#aaa; font-family: Roboto Mono; text-align: center; margin-top:-10px;'>💡 Colori chiari/gialli = Rettilinei (Alta Vel.)<br>Colori scuri = Curve (Bassa Vel.)</div>",
-                        unsafe_allow_html=True)
-        except Exception as e:
-            st.warning("Mappa del tracciato non disponibile.")
+                try:
+                    circuit_info = sess.get_circuit_info()
+                    corners = circuit_info.corners
+                except:
+                    corners = pd.DataFrame()
+
+                fig_track = go.Figure()
+
+                fig_track.add_trace(go.Scatter(
+                    x=tel['X'], y=tel['Y'],
+                    mode='markers',
+                    marker=dict(
+                        size=4,
+                        color=tel['Speed'],
+                        colorscale='inferno',
+                        showscale=False
+                    ),
+                    hoverinfo='skip'
+                ))
+
+                if not corners.empty and 'X' in corners.columns and 'Y' in corners.columns:
+                    for _, corner in corners.iterrows():
+                        c_num = str(corner.get('Number', '')).replace('.0', '')
+                        c_let = str(corner.get('Letter', '')).replace('nan', '')
+
+                        fig_track.add_annotation(
+                            x=corner['X'], y=corner['Y'],
+                            text=f"{c_num}{c_let}",
+                            showarrow=False,
+                            font=dict(color='white', size=11, family="Anton"),
+                            bgcolor="#FF2800",
+                            borderpad=2,
+                            bordercolor="white",
+                            borderwidth=1
+                        )
+
+                fig_track.update_layout(
+                    title=get_chart_title("Track Map"),
+                    images=get_watermark(),
+                    template="plotly_dark",
+                    paper_bgcolor='#0f0f0f',
+                    plot_bgcolor='#0f0f0f',
+                    margin=dict(l=0, r=0, t=60, b=0),
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1),
+                    height=280
+                )
+                st.plotly_chart(fig_track, use_container_width=True)
+                st.markdown(
+                    "<div style='font-size:12px; color:#aaa; font-family: Roboto Mono; text-align: center; margin-top:-10px;'>💡 Colori chiari/gialli = Rettilinei (Alta Vel.)<br>Colori scuri = Curve (Bassa Vel.)</div>",
+                    unsafe_allow_html=True)
+    except Exception as e:
+        st.warning("Mappa del tracciato non disponibile.")
 
 title_txt = f"{sel_year} {sel_event_label} - {sel_session_display} | @PITWALLDATA"
+# AUMENTATA DIMENSIONE LOGO HEADER (da 40px a 80px)
 st.markdown(
-    f"""<div style="border-bottom:3px solid #FF2800;padding:15px;background:#111;display:flex;align-items:center;margin-bottom:20px;"><img src="{LOGO_URL}" height="40" style="margin-right:20px"><span style="font-size:26px;color:white;font-family:'Anton';letter-spacing:1px;">{title_txt}</span></div>""",
+    f"""<div style="border-bottom:3px solid #FF2800;padding:15px;background:#111;display:flex;align-items:center;margin-bottom:20px;"><img src="{LOGO_URL}" height="80" style="margin-right:20px"><span style="font-size:26px;color:white;font-family:'Anton';letter-spacing:1px;">{title_txt}</span></div>""",
     unsafe_allow_html=True)
 
 session = st.session_state['session_loaded']
@@ -644,9 +684,11 @@ if tool == "TELEMETRIA PRO":
                                 fig.update_yaxes(title_text=f"{ch} [{units.get(ch, '')}]", row=target_row, col=1)
 
                 fig.update_layout(
+                    title=get_chart_title("Telemetria Pro"),
+                    images=get_watermark(),
                     height=250 * n_rows,
                     template="plotly_dark", paper_bgcolor='#000', plot_bgcolor='#0a0a0a',
-                    margin=dict(r=20, t=30), hovermode="x unified",
+                    margin=dict(r=20, t=70), hovermode="x unified",
                     legend=dict(orientation="h", y=1.02, x=0, xanchor="left", yanchor="bottom")
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -663,8 +705,12 @@ elif tool == "PACE PERFORMANCE":
         if not clean_laps.empty:
             fig_viol = px.box(clean_laps, x="Driver", y="LapTimeSec", color="Driver", points="all",
                               color_discrete_map=custom_colors)
-            fig_viol.update_layout(title="Distribuzione Tempi", showlegend=False, template="plotly_dark",
-                                   paper_bgcolor='#000', plot_bgcolor='#111')
+            fig_viol.update_layout(
+                title=get_chart_title("Distribuzione Tempi"),
+                images=get_watermark(),
+                showlegend=False, template="plotly_dark",
+                paper_bgcolor='#000', plot_bgcolor='#111', margin=dict(t=70)
+            )
             st.plotly_chart(fig_viol, use_container_width=True)
 
 # ==============================================================================
@@ -690,8 +736,12 @@ elif tool == "STRATEGIE":
                     go.Bar(y=[driver], x=[dur], base=[s['LapStart']], orientation='h', marker=dict(color=bar_col),
                            name=s['Compound'], showlegend=False))
 
-        fig.update_layout(title="Cronologia Stint", barmode='stack', template="plotly_dark", paper_bgcolor='#000',
-                          plot_bgcolor='#111')
+        fig.update_layout(
+            title=get_chart_title("Cronologia Stint"),
+            images=get_watermark(),
+            barmode='stack', template="plotly_dark", paper_bgcolor='#000',
+            plot_bgcolor='#111', margin=dict(t=70)
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 # ==============================================================================
@@ -705,7 +755,11 @@ elif tool == "METEO":
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(go.Scatter(x=w_data['Minutes'], y=w_data['TrackTemp'], name="Track Temp", line=dict(color='red')))
         fig.add_trace(go.Scatter(x=w_data['Minutes'], y=w_data['AirTemp'], name="Air Temp", line=dict(color='cyan')))
-        fig.update_layout(title="Evoluzione Meteo", template="plotly_dark", paper_bgcolor='#000', plot_bgcolor='#111')
+        fig.update_layout(
+            title=get_chart_title("Evoluzione Meteo"),
+            images=get_watermark(),
+            template="plotly_dark", paper_bgcolor='#000', plot_bgcolor='#111', margin=dict(t=70)
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 # ==============================================================================
@@ -1623,6 +1677,8 @@ elif tool == "G_LONGITUDINAL":
 
                 if len(fig.data) > 0:
                     fig.update_layout(
+                        title=get_chart_title("Accelerazione Longitudinale"),
+                        images=get_watermark(),
                         template="plotly_dark",
                         paper_bgcolor='#0f0f0f',
                         plot_bgcolor='#0f0f0f',
@@ -1758,6 +1814,8 @@ elif tool == "GLATERAL":
                             {'Driver': item['Driver'], 'Lap': item['Lap'], 'Max Lateral G': round(peak_lat_g, 2)})
 
                 fig.update_layout(
+                    title=get_chart_title("Lateral G-Force"),
+                    images=get_watermark(),
                     template="plotly_dark",
                     paper_bgcolor='#0f0f0f',
                     plot_bgcolor='#0f0f0f',
@@ -1972,6 +2030,8 @@ elif tool == "CIRCLE":
 
                 # --- MODIFICA 4: Range grafico adattato ai nuovi limiti realistici ---
                 fig_gg.update_layout(
+                    title=get_chart_title("Friction Circle (GG-Diagram)"),
+                    images=get_watermark(),
                     template="plotly_dark", paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
                     xaxis=dict(title="Lateral G (Valore Assoluto)", range=[0, 6], zeroline=True, zerolinecolor='#666',
                                gridcolor='#222'),
@@ -2125,10 +2185,11 @@ elif tool == "TIRE DEGRADATION":
             if summary_deg:
                 # Setup Layout Grafico Plotly
                 fig_deg.update_layout(
+                    title=get_chart_title("Analisi Passo e Degrado (Trendline)"),
+                    images=get_watermark(),
                     template="plotly_dark",
                     paper_bgcolor='#0f0f0f',
                     plot_bgcolor='#0f0f0f',
-                    title="Analisi Passo e Degrado (Trendline)",
                     xaxis=dict(title="Numero di Giro", gridcolor='#222', zeroline=False),
                     yaxis=dict(title="Tempo sul Giro (Secondi)", gridcolor='#222', zeroline=False),
                     hovermode="x unified",
@@ -2249,7 +2310,8 @@ elif tool == "SIMULAZIONE PASSO GARA":
             max_y = df_avg['AvgTimeSec'].max() + 0.5
 
             fig_bar.update_layout(
-                title="Passo Medio sui Giri Selezionati",
+                title=get_chart_title("Passo Medio sui Giri Selezionati"),
+                images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
                 yaxis=dict(range=[min_y, max_y], title="Tempo Medio (s)", gridcolor='#222'),
@@ -2292,7 +2354,8 @@ elif tool == "SIMULAZIONE PASSO GARA":
                 ))
 
             fig_scatter.update_layout(
-                title="Evoluzione Tempi e Utilizzo Mescole (Giri allineati da 1)",
+                title=get_chart_title("Evoluzione Tempi e Utilizzo Mescole (Giri allineati da 1)"),
+                images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
                 xaxis=dict(title="Numero Giro (Relativo allo Stint)", gridcolor='#222', tickmode='linear'),
@@ -2303,12 +2366,144 @@ elif tool == "SIMULAZIONE PASSO GARA":
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
 
+            st.markdown("#### 📊 Recap Tabellare")
+            recap_data = []
+            for driver, df_driver in selected_laps_data.items():
+                if df_driver.empty: continue
+                avg_time = df_driver['LapTimeSec'].mean()
+                best_time = df_driver['LapTimeSec'].min()
+                recap_data.append({'Pilota': driver, 'Giri Analizzati': len(df_driver), 'Passo Medio': f"{int(avg_time // 60)}:{avg_time % 60:06.3f}" if avg_time >= 60 else f"{avg_time:.3f}", 'Miglior Giro': f"{int(best_time // 60)}:{best_time % 60:06.3f}" if best_time >= 60 else f"{best_time:.3f}", 'Mescole': ", ".join([str(c) for c in df_driver['Compound'].dropna().unique()])})
+            st.dataframe(pd.DataFrame(recap_data).style.set_properties(**{'background-color': '#1a1a1a', 'color': '#cccccc'}), use_container_width=True, hide_index=True)
+
+
+# ==============================================================================
+# NUOVO TOOL: AVG TELEMETRY-SIM PASSO
+# ==============================================================================
+elif tool == "AVG TELEMETRY-SIM PASSO":
+    st.subheader("📈 AVG TELEMETRY-SIM PASSO (Telemetria Media Long Run)")
+    st.markdown("Calcola e traccia la telemetria media (Speed, Throttle, Brake, RPM) di tutti i giri selezionati, per mostrare il comportamento tipico del pilota a pieno carico. Metro per metro.")
+
+    if laps.empty:
+        st.warning("Nessun dato cronometrico.")
+    else:
+        selected_laps_data = {}
+        st.markdown("#### 1. Selezione Giri da mediare")
+        cols = st.columns(max(1, len(sel_drivers)))
+
+        for i, driver in enumerate(sel_drivers):
+            d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec']).copy()
+            if not d_laps.empty:
+                lap_times_dict = dict(zip(d_laps['LapNumber'].astype(int), d_laps['LapTimeSec']))
+                threshold = d_laps['LapTimeSec'].median() * 1.07
+                valid_opts = d_laps[d_laps['LapTimeSec'] <= threshold]['LapNumber'].astype(int).tolist()
+
+                with cols[i % len(cols)]:
+                    with st.expander(f"⚙️ Giri {driver}", expanded=True):
+                        st.markdown(f"<span style='color:{custom_colors.get(driver, '#FFF')}; font-weight:bold;'>{driver}</span>", unsafe_allow_html=True)
+                        chosen_laps = st.multiselect(
+                            f"Giri da mediare",
+                            options=d_laps['LapNumber'].astype(int).tolist(),
+                            default=valid_opts,
+                            format_func=lambda x: f"L{x} - {lap_times_dict.get(x, 0):.3f}s",
+                            key=f"avg_tel_laps_{driver}",
+                            label_visibility="collapsed"
+                        )
+                        if chosen_laps:
+                            selected_laps_data[driver] = d_laps[d_laps['LapNumber'].isin(chosen_laps)]
+
+        if selected_laps_data:
+            st.markdown("---")
+            sel_ch_avg = st.multiselect("Canali da mediare", ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear'], default=['Speed', 'Throttle', 'Brake'])
+
+            if sel_ch_avg:
+                with st.spinner("Allineamento e calcolo della media matematica della telemetria in corso..."):
+                    avg_plot_data = []
+
+                    for driver, df_driver in selected_laps_data.items():
+                        all_telemetries = []
+                        # Prendo il giro più veloce del gruppo come master per la griglia di distanza
+                        best_lap_idx = df_driver['LapTimeSec'].idxmin()
+                        master_tel = get_telemetry_for_lap(df_driver.loc[best_lap_idx])
+
+                        if not master_tel.empty:
+                            master_dist = master_tel['Distance'].values
+
+                            for _, row in df_driver.iterrows():
+                                tel = get_telemetry_for_lap(row)
+                                if not tel.empty:
+                                    comp_dist = tel['Distance'].values
+                                    # Rimuove duplicati dalla distanza per l'interpolazione
+                                    _, unique_indices = np.unique(comp_dist, return_index=True)
+                                    comp_dist_u = comp_dist[unique_indices]
+
+                                    interp_channels = {}
+                                    for ch in sel_ch_avg:
+                                        if ch in tel.columns:
+                                            # Interpolazione sul master_dist
+                                            interp_ch = np.interp(master_dist, comp_dist_u, tel[ch].values[unique_indices])
+                                            interp_channels[ch] = interp_ch
+                                    all_telemetries.append(interp_channels)
+
+                            if all_telemetries:
+                                avg_channels = {}
+                                for ch in sel_ch_avg:
+                                    # Stack e calcolo media lungo l'asse 0 per ogni canale
+                                    mat = np.array([t[ch] for t in all_telemetries if ch in t])
+                                    if mat.size > 0:
+                                        if ch == 'nGear':
+                                            # Per la marcia, arrotondiamo al numero intero
+                                            avg_channels[ch] = np.round(np.mean(mat, axis=0))
+                                        else:
+                                            avg_channels[ch] = np.mean(mat, axis=0)
+
+                                avg_plot_data.append({
+                                    'driver': driver,
+                                    'dist': master_dist,
+                                    'channels': avg_channels,
+                                    'color': custom_colors.get(driver, '#FFF'),
+                                    'n_laps': len(all_telemetries)
+                                })
+
+                    n_rows = len(sel_ch_avg)
+                    if n_rows > 0 and avg_plot_data:
+                        fig_avg = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+
+                        for idx_ch, ch in enumerate(sel_ch_avg):
+                            t_row = idx_ch + 1
+                            for item in avg_plot_data:
+                                if ch in item['channels']:
+                                    label_name = f"{item['driver']} (Media {item['n_laps']} giri)"
+                                    fig_avg.add_trace(go.Scatter(
+                                        x=item['dist'],
+                                        y=item['channels'][ch],
+                                        mode='lines',
+                                        name=label_name,
+                                        line=dict(color=item['color'], width=2.5),
+                                        legendgroup=item['driver'],
+                                        showlegend=(idx_ch == 0)
+                                    ), row=t_row, col=1)
+
+                            units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'nGear': 'Gear'}
+                            fig_avg.update_yaxes(title_text=f"Avg {ch} [{units.get(ch, '')}]", row=t_row, col=1)
+
+                        fig_avg.update_layout(
+                            title=get_chart_title("Average Telemetry (Long Run)"),
+                            images=get_watermark(),
+                            height=250 * n_rows,
+                            template="plotly_dark", paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
+                            margin=dict(r=20, t=70), hovermode="x unified",
+                            legend=dict(orientation="h", y=1.02, x=0, xanchor="left", yanchor="bottom")
+                        )
+                        st.plotly_chart(fig_avg, use_container_width=True)
+                        st.info("💡 Questo grafico non mostra un giro reale, ma la media matematica esatta di tutti i giri selezionati. Ottimo per valutare il vero stile di guida a serbatoio pieno al netto di sbavature in singole curve.")
+
+
 # ==============================================================================
 # TOOL 17: PASSO GARA
 # ==============================================================================
 elif tool == "PASSO GARA":
     st.subheader("🏎️ PASSO GARA (Analisi in Gara)")
-    st.markdown("Seleziona gli stint di gara. Vengono scartati automaticamente i giri di SC, VSC, Bandiera Rossa e di ingresso/uscita dai box.")
+    st.markdown("Seleziona gli stint di gara. Vengono scartati automaticamente i giri di SC, VSC, Bandiera Rossa, l'ingresso/uscita dai box e il primo giro (L1).")
 
     if laps.empty:
         st.warning("Nessun dato cronometrico disponibile.")
@@ -2355,8 +2550,8 @@ elif tool == "PASSO GARA":
                         # Filtra per stint selezionati
                         d_laps_stint = d_laps[d_laps['Stint'].isin(valid_stints)].copy()
 
-                        # Filtro 1: Elimina giri di box in/out
-                        d_laps_clean = d_laps_stint[(d_laps_stint['PitOutTime'].isnull()) & (d_laps_stint['PitInTime'].isnull())].copy()
+                        # Filtro 1: Elimina giri di box in/out e il PRIMO GIRO (> 1)
+                        d_laps_clean = d_laps_stint[(d_laps_stint['PitOutTime'].isnull()) & (d_laps_stint['PitInTime'].isnull()) & (d_laps_stint['LapNumber'] > 1)].copy()
 
                         # Filtro 2: Elimina SC/VSC controllando TrackStatus
                         if 'TrackStatus' in d_laps_clean.columns:
@@ -2405,7 +2600,8 @@ elif tool == "PASSO GARA":
             max_y = df_avg['AvgTimeSec'].max() + 0.5
 
             fig_bar.update_layout(
-                title="Passo Medio in Gara (Esclusi In/Out, SC, VSC)",
+                title=get_chart_title("Passo Medio in Gara (Esclusi In/Out, SC, VSC)"),
+                images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
                 yaxis=dict(range=[min_y, max_y], title="Tempo Medio (s)", gridcolor='#222'),
@@ -2446,7 +2642,8 @@ elif tool == "PASSO GARA":
                 ))
 
             fig_scatter.update_layout(
-                title="Evoluzione Tempi e Utilizzo Mescole (Giro Assoluto)",
+                title=get_chart_title("Evoluzione Tempi e Utilizzo Mescole (Giro Assoluto)"),
+                images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
                 xaxis=dict(title="Giro di Gara", gridcolor='#222'),
@@ -2456,6 +2653,16 @@ elif tool == "PASSO GARA":
                 height=550
             )
             st.plotly_chart(fig_scatter, use_container_width=True)
+
+            st.markdown("#### 📊 Recap Tabellare")
+            recap_data = []
+            for driver, df_driver in selected_laps_data.items():
+                if df_driver.empty: continue
+                avg_time = df_driver['LapTimeSec'].mean()
+                best_time = df_driver['LapTimeSec'].min()
+                recap_data.append({'Pilota': driver, 'Giri Validi': len(df_driver), 'Passo Medio': f"{int(avg_time // 60)}:{avg_time % 60:06.3f}" if avg_time >= 60 else f"{avg_time:.3f}", 'Miglior Giro': f"{int(best_time // 60)}:{best_time % 60:06.3f}" if best_time >= 60 else f"{best_time:.3f}", 'Mescole': ", ".join([str(c) for c in df_driver['Compound'].dropna().unique()])})
+            st.dataframe(pd.DataFrame(recap_data).style.set_properties(**{'background-color': '#1a1a1a', 'color': '#cccccc'}), use_container_width=True, hide_index=True)
+
 
 # ==============================================================================
 # TOOL 18: RACE TRACE
@@ -2503,7 +2710,8 @@ elif tool == "RACE TRACE":
             ))
 
         fig_trace.update_layout(
-            title=f"Race Trace (Target Pace: {ref_time:.2f}s)",
+            title=get_chart_title(f"Race Trace (Target Pace: {ref_time:.2f}s)"),
+            images=get_watermark(),
             template="plotly_dark",
             paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
             xaxis=dict(title="Giro di Gara", gridcolor='#222'),
@@ -2747,7 +2955,11 @@ elif tool == "TELEMETRY DIFF SESSION":
                                         units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'nGear': 'Gear'}
                                         fig_diff.update_yaxes(title_text=f"{ch} [{units.get(ch, '')}]", row=t_row, col=1)
 
-                        fig_diff.update_layout(height=250 * n_rows_diff, template="plotly_dark", paper_bgcolor='#000', plot_bgcolor='#0a0a0a', margin=dict(r=20, t=30), hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0))
+                        fig_diff.update_layout(
+                            title=get_chart_title("Telemetria Comparata Diff Session"),
+                            images=get_watermark(),
+                            height=250 * n_rows_diff,
+                            template="plotly_dark", paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f', margin=dict(r=20, t=70), hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0))
                         st.plotly_chart(fig_diff, use_container_width=True)
 
                         st.info("💡 **Legenda Grafico:** Le linee **continue** rappresentano i dati della Sessione A (Base), mentre le linee **tratteggiate** indicano i dati della Sessione B (Confronto).")
@@ -2875,14 +3087,15 @@ elif tool == "MICROSECTORS MAP":
                                 ))
 
                             fig_map.update_layout(
-                                title=f"Microsectors Dominance Track Map ({num_microsectors} Sectors)",
+                                title=get_chart_title(f"Microsectors Dominance Map ({num_microsectors} Sectors)"),
+                                images=get_watermark(),
                                 template="plotly_dark",
                                 paper_bgcolor='#0f0f0f',
                                 plot_bgcolor='#0f0f0f',
                                 xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
                                 yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1),
                                 height=650,
-                                margin=dict(l=0, r=0, t=50, b=0),
+                                margin=dict(l=0, r=0, t=70, b=0),
                                 legend=dict(orientation="h", y=1.05, x=0)
                             )
 
