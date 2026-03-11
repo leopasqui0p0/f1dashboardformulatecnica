@@ -13,11 +13,13 @@ import shutil
 import io
 import matplotlib.pyplot as plt
 import base64
+from datetime import datetime
+from PIL import Image
 
 # ==============================================================================
 # WATERMARK & LOGO LOCALE
 # ==============================================================================
-LOGO_FILENAME = "logoft.png"
+LOGO_FILENAME = "logo.png"
 
 
 def get_base64_image(image_path):
@@ -183,33 +185,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Tonalità modificate per contrasto maggiore tra compagni di squadra
 DRIVER_COLORS = {
-    # Red Bull (Blu Elettrico vs Blu Notte)
-    'VER': '#1e41ff', 'PER': '#00155e',
-    # Ferrari (Rosso Fuoco vs Rosso Bordeaux scuro)
+    'VER': '#1e41ff', 'PER': '#00155e', 'HAD': '#00155e',
     'LEC': '#ff0000', 'HAM': '#800000', 'SAI': '#cc0000',
-    # McLaren (Arancione Acceso vs Arancione Scuro/Marrone)
     'NOR': '#ff8700', 'PIA': '#8c4a00',
-    # Mercedes (Verde Acqua vs Ottanio scuro)
     'RUS': '#00d2be', 'ANT': '#005951',
-    # Aston Martin (Verde Aston vs Verde scurissimo)
     'ALO': '#006f62', 'STR': '#00332d',
-    # Racing Bulls (Azzurro vs Blu Avio)
     'TSU': '#6692ff', 'LAW': '#1a41b3', 'RIC': '#1a41b3',
-    # Williams (Azzurro intenso vs Blu scurissimo)
     'ALB': '#005aff', 'COL': '#002566',
-    # Alpine (Rosa acceso vs Prugna/Rosa scuro)
     'GAS': '#ff69b4', 'DOO': '#992663', 'OCO': '#992663',
-    # Sauber (Verde Lime vs Verde Foresta scuro)
     'BOT': '#52e252', 'ZHO': '#1c661c', 'BOR': '#52e252',
-    # Haas (Bianco puro vs Grigio Scuro)
     'HUL': '#ffffff', 'MAG': '#666666', 'BEA': '#666666', 'OEA': '#666666'
 }
 
 
 # ==============================================================================
-# 3. MOTORE DATI (FASTF1 OFFICIAL)
+# 3. MOTORE DATI E PRESELEZIONE EVENTO AUTOMATICA (WEEKEND SUCCESSIVO)
 # ==============================================================================
 @st.cache_data(ttl=3600)
 def get_schedule_data(year):
@@ -284,9 +275,8 @@ def get_weather_history(session):
 # 4. UI & SIDEBAR
 # ==============================================================================
 with st.sidebar:
-    # AUMENTATA LA DIMENSIONE DEL LOGO NELLA BARRA LATERALE a 180px
     st.markdown(f'<img src="{LOGO_URL}" width="180">', unsafe_allow_html=True)
-    st.write("")  # Spazio vuoto
+    st.write("")
     st.header("1. SESSIONE (FASTF1)")
 
     sel_year = st.selectbox("Anno", [2026, 2025, 2024], index=0)
@@ -296,8 +286,11 @@ with st.sidebar:
 
     events_mapping = {}
     test_number = 1
+    events_list = []
+    default_event_idx = 0
 
     if not schedule.empty:
+        # Costruzione Mapping Eventi
         test_events = schedule[schedule['EventName'].str.contains("Test", case=False, na=False)]
         test_count = 1
         for _, r in test_events.iterrows():
@@ -309,15 +302,28 @@ with st.sidebar:
             events_mapping["TEST: Bahrain 1"] = "Pre-Season Testing 1"
             events_mapping["TEST: Bahrain 2"] = "Pre-Season Testing 2"
 
-        gps = schedule[
-            (schedule['RoundNumber'] > 0) & (~schedule['EventName'].str.contains("Test", case=False, na=False))]
+        gps = schedule[(schedule['RoundNumber'] > 0) & (~schedule['EventName'].str.contains("Test", case=False, na=False))]
         for _, r in gps.iterrows():
             ui_label = f"R{r['RoundNumber']}: {r['EventName']}"
             events_mapping[ui_label] = r['EventName']
 
         events_list = list(events_mapping.keys())
-        sel_event_label = st.selectbox("Evento", events_list, index=0)
 
+        # CALCOLO AUTO-SELEZIONE GRAN PREMIO SUCCESSIVO/CORRENTE
+        try:
+            now = pd.Timestamp.now().tz_localize(None)
+            # Prendi gli eventi futuri o appena passati (tolleranza 3 giorni per coprire il weekend corrente)
+            upcoming_events = schedule[schedule['EventDate'].dt.tz_localize(None) >= now - pd.Timedelta(days=3)]
+            if not upcoming_events.empty:
+                next_event_name = upcoming_events.iloc[0]['EventName']
+                for i, ev_label in enumerate(events_list):
+                    if next_event_name in ev_label:
+                        default_event_idx = i
+                        break
+        except Exception:
+            default_event_idx = 0  # Fallback al primo evento
+
+        sel_event_label = st.selectbox("Evento", events_list, index=default_event_idx)
         event_name_for_api = events_mapping[sel_event_label]
         is_test = "TEST:" in sel_event_label
 
@@ -327,7 +333,6 @@ with st.sidebar:
             except ValueError:
                 test_number = 1
 
-        if is_test:
             st.info("💡 Modalità Test: Giorni forzati")
             session_opts = ['Day 1', 'Day 2', 'Day 3']
             sel_session_display = st.selectbox("Giorno di Test", session_opts, index=0)
@@ -348,7 +353,8 @@ with st.sidebar:
             if not session_opts:
                 session_opts = ['Practice 1', 'Practice 2', 'Practice 3', 'Qualifying', 'Race']
 
-            sel_session_display = st.selectbox("Sessione Ufficiale", session_opts, index=0)
+            # Seleziona l'ultima sessione disponibile per default (solitamente Gara o l'ultima finita)
+            sel_session_display = st.selectbox("Sessione Ufficiale", session_opts, index=len(session_opts) - 1 if session_opts else 0)
             session_identifier = sel_session_display
     else:
         st.error("Impossibile caricare il calendario.")
@@ -363,8 +369,7 @@ with st.sidebar:
 
     if load_btn:
         with st.status("Stabilendo connessione ai server F1...", expanded=True) as status:
-            session_obj, error_msg = load_session_data(sel_year, event_name_for_api, session_identifier, is_test,
-                                                       test_number)
+            session_obj, error_msg = load_session_data(sel_year, event_name_for_api, session_identifier, is_test, test_number)
             if session_obj is not None:
                 st.session_state['session_loaded'] = session_obj
                 status.update(label="Dati scaricati con successo!", state="complete", expanded=False)
@@ -388,7 +393,6 @@ with st.sidebar:
         "CIRCLE",
         "TIRE DEGRADATION",
         "SIMULAZIONE PASSO GARA",
-        "AVG TELEMETRY-SIM PASSO",
         "PASSO GARA",
         "RACE TRACE",
         "MICROSECTORS MAP",
@@ -396,15 +400,21 @@ with st.sidebar:
     ])
 
     st.header("3. DRIVERS")
-    available_drivers = ['VER', 'LEC', 'HAM', 'NOR', 'RUS', 'ALO']
-    default_drivers = ['LEC', 'VER']
+
+    # NUOVI PILOTI DI DEFAULT COME RICHIESTO
+    desired_defaults = ['LEC', 'HAM', 'NOR', 'PIA', 'RUS', 'ANT', 'VER', 'HAD']
+    available_drivers = desired_defaults.copy()
+    default_drivers = desired_defaults.copy()
 
     if st.session_state['session_loaded']:
         try:
             session_laps = st.session_state['session_loaded'].laps
             if not session_laps.empty:
                 available_drivers = sorted(session_laps['Driver'].dropna().unique())
-                default_drivers = available_drivers[:2] if len(available_drivers) > 1 else available_drivers
+                # Filtra i default per evitare errori se un pilota non ha girato
+                default_drivers = [d for d in desired_defaults if d in available_drivers]
+                if not default_drivers:
+                    default_drivers = available_drivers[:2] if len(available_drivers) > 1 else available_drivers
         except Exception:
             pass
 
@@ -420,13 +430,23 @@ def get_chart_title(tool_name):
 
 
 def get_watermark():
-    # AUMENTATA DIMENSIONE WATERMARK NEI GRAFICI (sizex e sizey da 0.10 a 0.20)
+    # Fix Plotly Base64 Bug: Utilizza PIL Image per il rendering SVG Plotly se il file locale esiste
+    try:
+        if os.path.exists(LOGO_FILENAME):
+            img = Image.open(LOGO_FILENAME)
+        else:
+            img = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
+    except Exception:
+        img = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
+
     return [dict(
-        source=WATERMARK_URL,
+        source=img,
         xref="paper", yref="paper",
-        x=1.0, y=1.08,
+        # SPOSTAMENTO LOGO: Verticalmente circa a metà (0.5), leggermente più in basso.
+        # Spostato da y=1.08 (fuori in alto) a y=0.42 (all'interno del grafico)
+        x=1.0, y=0.42,
         sizex=0.20, sizey=0.20,
-        xanchor="right", yanchor="bottom"
+        xanchor="right", yanchor="bottom"  # Ancoraggio in basso rispetto alla coordinata y
     )]
 
 
@@ -479,7 +499,7 @@ if st.session_state['session_loaded'] and tool != "MICROSECTORS MAP":
 
                 fig_track.update_layout(
                     title=get_chart_title("Track Map"),
-                    images=get_watermark(),
+                    # Watermark non aggiunto qui per pulizia della mappa, ma disponibile
                     template="plotly_dark",
                     paper_bgcolor='#0f0f0f',
                     plot_bgcolor='#0f0f0f',
@@ -496,7 +516,6 @@ if st.session_state['session_loaded'] and tool != "MICROSECTORS MAP":
         st.warning("Mappa del tracciato non disponibile.")
 
 title_txt = f"{sel_year} {sel_event_label} - {sel_session_display} | @PITWALLDATA"
-# AUMENTATA DIMENSIONE LOGO HEADER (da 40px a 80px)
 st.markdown(
     f"""<div style="border-bottom:3px solid #FF2800;padding:15px;background:#111;display:flex;align-items:center;margin-bottom:20px;"><img src="{LOGO_URL}" height="80" style="margin-right:20px"><span style="font-size:26px;color:white;font-family:'Anton';letter-spacing:1px;">{title_txt}</span></div>""",
     unsafe_allow_html=True)
@@ -680,7 +699,7 @@ if tool == "TELEMETRIA PRO":
                                     ), row=target_row, col=1)
 
                             if idx == 0:
-                                units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm'}
+                                units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'PowerFactor': 'W/kg'}
                                 fig.update_yaxes(title_text=f"{ch} [{units.get(ch, '')}]", row=target_row, col=1)
 
                 fig.update_layout(
@@ -700,18 +719,34 @@ elif tool == "PACE PERFORMANCE":
     st.subheader("📊 ANALISI PASSO GARA")
     drivers_laps = laps[laps['Driver'].isin(sel_drivers)].copy()
     if not drivers_laps.empty:
-        threshold = drivers_laps['LapTimeSec'].median() * 1.10
-        clean_laps = drivers_laps[drivers_laps['LapTimeSec'] < threshold]
-        if not clean_laps.empty:
-            fig_viol = px.box(clean_laps, x="Driver", y="LapTimeSec", color="Driver", points="all",
-                              color_discrete_map=custom_colors)
-            fig_viol.update_layout(
-                title=get_chart_title("Distribuzione Tempi"),
-                images=get_watermark(),
-                showlegend=False, template="plotly_dark",
-                paper_bgcolor='#000', plot_bgcolor='#111', margin=dict(t=70)
-            )
-            st.plotly_chart(fig_viol, use_container_width=True)
+        col_flags, col_radio = st.columns([1, 3])
+        stint_options = ["Tutta la gara"] + [f"Stint {i}" for i in range(1, 11)]
+
+        with col_radio:
+            selected_global_stint = st.radio("Seleziona Stint", options=stint_options, horizontal=True, key="pace_perf_stint")
+
+        if selected_global_stint != "Tutta la gara":
+            target_stint_num = int(selected_global_stint.split(" ")[1])
+            if 'Stint' in drivers_laps.columns:
+                drivers_laps = drivers_laps[drivers_laps['Stint'] == target_stint_num]
+
+        if not drivers_laps.empty:
+            threshold = drivers_laps['LapTimeSec'].median() * 1.10
+            clean_laps = drivers_laps[drivers_laps['LapTimeSec'] < threshold]
+            if not clean_laps.empty:
+                fig_viol = px.box(clean_laps, x="Driver", y="LapTimeSec", color="Driver", points="all",
+                                  color_discrete_map=custom_colors)
+                fig_viol.update_layout(
+                    title=get_chart_title(f"Distribuzione Tempi - {selected_global_stint}"),
+                    images=get_watermark(),
+                    showlegend=False, template="plotly_dark",
+                    paper_bgcolor='#0f0f0f', plot_bgcolor='#111', margin=dict(t=70)
+                )
+                st.plotly_chart(fig_viol, use_container_width=True)
+            else:
+                st.warning(f"Nessun tempo valido (senza traffico/SC) trovato per i piloti in {selected_global_stint}.")
+        else:
+            st.warning(f"Nessun giro registrato o stint inesistente per i piloti in {selected_global_stint}.")
 
 # ==============================================================================
 # TOOL 3: STRATEGIE (Tyre History)
@@ -739,7 +774,7 @@ elif tool == "STRATEGIE":
         fig.update_layout(
             title=get_chart_title("Cronologia Stint"),
             images=get_watermark(),
-            barmode='stack', template="plotly_dark", paper_bgcolor='#000',
+            barmode='stack', template="plotly_dark", paper_bgcolor='#0f0f0f',
             plot_bgcolor='#111', margin=dict(t=70)
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -758,7 +793,7 @@ elif tool == "METEO":
         fig.update_layout(
             title=get_chart_title("Evoluzione Meteo"),
             images=get_watermark(),
-            template="plotly_dark", paper_bgcolor='#000', plot_bgcolor='#111', margin=dict(t=70)
+            template="plotly_dark", paper_bgcolor='#0f0f0f', plot_bgcolor='#111', margin=dict(t=70)
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -2089,8 +2124,7 @@ elif tool == "CIRCLE":
 # ==============================================================================
 elif tool == "TIRE DEGRADATION":
     st.subheader("🛞 TIRE DEGRADATION (Analisi Passo e Usura)")
-    st.markdown(
-        "Stima matematica del degrado degli pneumatici basata sull'innalzamento dei tempi sul giro durante i Long Run. Vengono esclusi in automatico giri lenti, Safety Car e pit-stop.")
+    st.markdown("Stima matematica del degrado degli pneumatici basata sull'innalzamento dei tempi sul giro durante i Long Run. Vengono esclusi in automatico giri lenti, Safety Car e pit-stop.")
 
     if laps.empty:
         st.warning("Nessun dato cronometrico disponibile.")
@@ -2098,12 +2132,9 @@ elif tool == "TIRE DEGRADATION":
         # Impostazioni Filtro
         col1, col2 = st.columns(2)
         with col1:
-            min_laps_stint = st.number_input("Lunghezza minima dello stint (Giri)", min_value=3, max_value=20, value=5,
-                                             help="Ignora gli stint più corti di questo valore (es. giri da qualifica).")
+            min_laps_stint = st.number_input("Lunghezza minima dello stint (Giri)", min_value=3, max_value=20, value=5, help="Ignora gli stint più corti di questo valore (es. giri da qualifica).")
         with col2:
-            outlier_threshold = st.slider("Filtro Traffico/Errori (+ Secondi)", min_value=1.0, max_value=5.0, value=2.0,
-                                          step=0.5,
-                                          help="Scarta i giri che sono X secondi più lenti del giro più veloce dello stint.")
+            outlier_threshold = st.slider("Filtro Traffico/Errori (+ Secondi)", min_value=1.0, max_value=5.0, value=2.0, step=0.5, help="Scarta i giri che sono X secondi più lenti del giro più veloce dello stint.")
 
         st.markdown("---")
 
@@ -2113,8 +2144,7 @@ elif tool == "TIRE DEGRADATION":
 
             for driver in sel_drivers:
                 d_laps = laps[laps['Driver'] == driver]
-                if d_laps.empty:
-                    continue
+                if d_laps.empty: continue
 
                 # Assicuriamoci che ci sia la colonna Stint
                 if 'Stint' not in d_laps.columns:
@@ -2126,14 +2156,10 @@ elif tool == "TIRE DEGRADATION":
                     stint_laps = d_laps[d_laps['Stint'] == stint_num].copy()
 
                     # Filtro 1: Lunghezza minima dello stint
-                    if len(stint_laps) < min_laps_stint:
-                        continue
+                    if len(stint_laps) < min_laps_stint: continue
 
                     compound = stint_laps['Compound'].iloc[0] if 'Compound' in stint_laps.columns else "Unknown"
-                    color_compound = {"SOFT": "#da291c", "MEDIUM": "#ffd100", "HARD": "#f0f0f0",
-                                      "INTERMEDIATE": "#43b02a", "WET": "#0067a5"}.get(str(compound).upper(),
-                                                                                       custom_colors.get(driver,
-                                                                                                         "#FFF"))
+                    color_compound = {"SOFT": "#da291c", "MEDIUM": "#ffd100", "HARD": "#f0f0f0", "INTERMEDIATE": "#43b02a", "WET": "#0067a5"}.get(str(compound).upper(), custom_colors.get(driver, "#FFF"))
 
                     # Filtro 2: Rimuovere In-Lap, Out-Lap e TrackStatus non verde
                     valid_laps = stint_laps[(stint_laps['PitOutTime'].isnull()) & (stint_laps['PitInTime'].isnull())]
@@ -2154,18 +2180,15 @@ elif tool == "TIRE DEGRADATION":
 
                         # Aggiunta punti Scatter (I tempi effettivi)
                         fig_deg.add_trace(go.Scatter(
-                            x=x_laps,
-                            y=y_times,
+                            x=x_laps, y=y_times,
                             mode='markers',
-                            marker=dict(color=custom_colors.get(driver, "#FFF"), size=8, opacity=0.7,
-                                        line=dict(width=1, color=color_compound)),
+                            marker=dict(color=custom_colors.get(driver, "#FFF"), size=8, opacity=0.7, line=dict(width=1, color=color_compound)),
                             name=f"{driver} (S{int(stint_num)} - {compound})"
                         ))
 
                         # Aggiunta linea di tendenza (Degrado)
                         fig_deg.add_trace(go.Scatter(
-                            x=x_laps,
-                            y=trendline,
+                            x=x_laps, y=trendline,
                             mode='lines',
                             line=dict(color=custom_colors.get(driver, "#FFF"), width=3, dash='solid'),
                             showlegend=False,
@@ -2217,8 +2240,7 @@ elif tool == "TIRE DEGRADATION":
 
 
                 df_summary_fmt = df_summary.copy()
-                df_summary_fmt['Degradation (s/lap)'] = df_summary_fmt['Degradation (s/lap)'].apply(
-                    lambda x: f"+{x:.3f} s" if x > 0 else f"{x:.3f} s")
+                df_summary_fmt['Degradation (s/lap)'] = df_summary_fmt['Degradation (s/lap)'].apply(lambda x: f"+{x:.3f} s" if x > 0 else f"{x:.3f} s")
 
                 styled_deg = df_summary_fmt.style.set_properties(**{
                     'background-color': '#1a1a1a', 'color': '#cccccc', 'border-color': '#333333', 'text-align': 'center'
@@ -2227,45 +2249,68 @@ elif tool == "TIRE DEGRADATION":
                 st.markdown("#### 📊 Sintesi Degrado (Classifica per minor consumo)")
                 st.dataframe(styled_deg, use_container_width=True, hide_index=True)
 
-                st.info(
-                    "💡 **Come leggere il dato:** Se la Degradation è **+0.100 s**, significa che il pilota perde in media 1 decimo di secondo a ogni giro percorso a causa del consumo della gomma. Valori evidenziati in azzurro indicano una gestione eccellente (o un carico di carburante che si svuota compensando il degrado).")
+                st.info("💡 **Come leggere il dato:** Se la Degradation è **+0.100 s**, significa che il pilota perde in media 1 decimo di secondo a ogni giro percorso a causa del consumo della gomma. Valori evidenziati in azzurro indicano una gestione eccellente (o un carico di carburante che si svuota compensando il degrado).")
             else:
-                st.warning(
-                    "Nessun Long Run valido trovato con i filtri attuali. Prova a diminuire i giri minimi o aumentare la tolleranza del filtro.")
+                st.warning("Nessun Long Run valido trovato con i filtri attuali. Prova a diminuire i giri minimi o aumentare la tolleranza del filtro.")
 
 # ==============================================================================
-# TOOL 14: SIMULAZIONE PASSO GARA
+# TOOL 14: SIMULAZIONE PASSO GARA E TELEMETRIA MEDIA
 # ==============================================================================
 elif tool == "SIMULAZIONE PASSO GARA":
     st.subheader("⏱️ SIMULAZIONE PASSO GARA")
-    st.markdown("Seleziona i giri specifici per ogni pilota per calcolare il passo medio e visualizzare il trend dei tempi con le relative mescole.")
+    st.markdown("Filtra i giri per finestra temporale della sessione e per tempo sul giro. In basso potrai calcolare la Telemetria Media dei giri filtrati.")
 
     if laps.empty:
         st.warning("Nessun dato cronometrico disponibile.")
     else:
-        show_labels = st.checkbox("Mostra tempi sui pallini", value=True)
+        show_labels = st.checkbox("Mostra tempi sui pallini nello Scatter", value=True)
         selected_laps_data = {}
 
-        st.markdown("#### 1. Selezione Giri")
+        st.markdown("#### 1. Filtri Globali per la Simulazione")
+
+        max_sess_min = 120
+        min_lap_time = 60.0
+        max_lap_time = 150.0
+
+        valid_timing_laps = laps.dropna(subset=['LapTimeSec', 'LapStartTime']).copy()
+        if not valid_timing_laps.empty:
+            valid_timing_laps['MinutoSessione'] = valid_timing_laps['LapStartTime'].dt.total_seconds() / 60
+            max_sess_min = int(valid_timing_laps['MinutoSessione'].max()) + 1
+            min_lap_time = float(valid_timing_laps['LapTimeSec'].min())
+            max_lap_time = float(valid_timing_laps['LapTimeSec'].max())
+
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            time_window = st.slider("Finestra Temporale Sessione (Minuti)", 0, max_sess_min, (0, max_sess_min))
+        with col_f2:
+            lap_window = st.slider("Finestra Tempo sul Giro (Secondi)", min_lap_time, max_lap_time, (min_lap_time, min_lap_time + 5.0))
+
+        st.markdown("#### 2. Selezione Giri")
         cols = st.columns(len(sel_drivers) if len(sel_drivers) > 0 else 1)
 
         for i, driver in enumerate(sel_drivers):
-            d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec']).copy()
-            if d_laps.empty:
-                continue
+            d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec', 'LapStartTime']).copy()
+            if d_laps.empty: continue
 
-            lap_times_dict = dict(zip(d_laps['LapNumber'].astype(int), d_laps['LapTimeSec']))
-            threshold = d_laps['LapTimeSec'].median() * 1.07
-            valid_opts = d_laps[d_laps['LapTimeSec'] <= threshold]['LapNumber'].astype(int).tolist()
-            all_opts = d_laps['LapNumber'].astype(int).tolist()
+            d_laps['MinutoSessione'] = d_laps['LapStartTime'].dt.total_seconds() / 60
+
+            filtered_laps = d_laps[
+                (d_laps['MinutoSessione'] >= time_window[0]) &
+                (d_laps['MinutoSessione'] <= time_window[1]) &
+                (d_laps['LapTimeSec'] >= lap_window[0]) &
+                (d_laps['LapTimeSec'] <= lap_window[1])
+                ]
+
+            lap_times_dict = dict(zip(filtered_laps['LapNumber'].astype(int), filtered_laps['LapTimeSec']))
+            filtered_opts = filtered_laps['LapNumber'].astype(int).tolist()
 
             with cols[i % len(cols)]:
                 with st.expander(f"⚙️ Giri {driver}", expanded=True):
-                    st.markdown(f"<span style='color:{custom_colors.get(driver, '#FFF')}; font-weight:bold;'>Seleziona i giri per il long run:</span>", unsafe_allow_html=True)
+                    st.markdown(f"<span style='color:{custom_colors.get(driver, '#FFF')}; font-weight:bold;'>{driver}</span>", unsafe_allow_html=True)
                     chosen_laps = st.multiselect(
-                        f"Giri {driver}",
-                        options=all_opts,
-                        default=valid_opts,
+                        f"Giri",
+                        options=filtered_opts,
+                        default=filtered_opts,
                         format_func=lambda x: f"L{x} - {lap_times_dict.get(x, 0):.3f}s",
                         key=f"sim_laps_{driver}",
                         label_visibility="collapsed"
@@ -2275,8 +2320,6 @@ elif tool == "SIMULAZIONE PASSO GARA":
 
         if selected_laps_data:
             st.markdown("---")
-            st.markdown("#### 2. Analisi Passo Medio")
-
             avg_data = []
             compound_colors = {
                 "SOFT": "#da291c", "MEDIUM": "#ffd100", "HARD": "#f0f0f0",
@@ -2322,10 +2365,8 @@ elif tool == "SIMULAZIONE PASSO GARA":
             st.plotly_chart(fig_bar, use_container_width=True)
 
             st.markdown("---")
-            st.markdown("#### 3. Scatter Plot Tempi e Mescole")
 
             fig_scatter = go.Figure()
-
             for driver, df_driver in selected_laps_data.items():
                 df_drv_sorted = df_driver.sort_values('LapNumber').copy()
                 df_drv_sorted['RelativeLap'] = np.arange(1, len(df_drv_sorted) + 1)
@@ -2350,15 +2391,15 @@ elif tool == "SIMULAZIONE PASSO GARA":
                     name=driver,
                     hovertext=df_drv_sorted['Compound'],
                     customdata=df_drv_sorted['LapNumber'],
-                    hovertemplate="<b>%{name}</b><br>Giro Reale: %{customdata}<br>Giro Stint: %{x}<br>Time: %{y:.3f} s<br>Tyre: %{hovertext}<extra></extra>"
+                    hovertemplate="<b>%{name}</b><br>Giro Reale: %{customdata}<br>Giro Rel: %{x}<br>Time: %{y:.3f} s<br>Tyre: %{hovertext}<extra></extra>"
                 ))
 
             fig_scatter.update_layout(
-                title=get_chart_title("Evoluzione Tempi e Utilizzo Mescole (Giri allineati da 1)"),
+                title=get_chart_title("Evoluzione Tempi (Giri allineati)"),
                 images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
-                xaxis=dict(title="Numero Giro (Relativo allo Stint)", gridcolor='#222', tickmode='linear'),
+                xaxis=dict(title="Numero Giro (Relativo)", gridcolor='#222', tickmode='linear'),
                 yaxis=dict(title="Tempo sul Giro (s)", gridcolor='#222'),
                 legend=dict(orientation="h", y=1.05, x=0),
                 hovermode="x unified",
@@ -2375,195 +2416,141 @@ elif tool == "SIMULAZIONE PASSO GARA":
                 recap_data.append({'Pilota': driver, 'Giri Analizzati': len(df_driver), 'Passo Medio': f"{int(avg_time // 60)}:{avg_time % 60:06.3f}" if avg_time >= 60 else f"{avg_time:.3f}", 'Miglior Giro': f"{int(best_time // 60)}:{best_time % 60:06.3f}" if best_time >= 60 else f"{best_time:.3f}", 'Mescole': ", ".join([str(c) for c in df_driver['Compound'].dropna().unique()])})
             st.dataframe(pd.DataFrame(recap_data).style.set_properties(**{'background-color': '#1a1a1a', 'color': '#cccccc'}), use_container_width=True, hide_index=True)
 
-
-# ==============================================================================
-# NUOVO TOOL: AVG TELEMETRY-SIM PASSO
-# ==============================================================================
-elif tool == "AVG TELEMETRY-SIM PASSO":
-    st.subheader("📈 AVG TELEMETRY-SIM PASSO (Telemetria Media Long Run)")
-    st.markdown("Calcola e traccia la telemetria media (Speed, Throttle, Brake, RPM) di tutti i giri selezionati, per mostrare il comportamento tipico del pilota a pieno carico. Metro per metro.")
-
-    if laps.empty:
-        st.warning("Nessun dato cronometrico.")
-    else:
-        selected_laps_data = {}
-        st.markdown("#### 1. Selezione Giri da mediare")
-        cols = st.columns(max(1, len(sel_drivers)))
-
-        for i, driver in enumerate(sel_drivers):
-            d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec']).copy()
-            if not d_laps.empty:
-                lap_times_dict = dict(zip(d_laps['LapNumber'].astype(int), d_laps['LapTimeSec']))
-                threshold = d_laps['LapTimeSec'].median() * 1.07
-                valid_opts = d_laps[d_laps['LapTimeSec'] <= threshold]['LapNumber'].astype(int).tolist()
-
-                with cols[i % len(cols)]:
-                    with st.expander(f"⚙️ Giri {driver}", expanded=True):
-                        st.markdown(f"<span style='color:{custom_colors.get(driver, '#FFF')}; font-weight:bold;'>{driver}</span>", unsafe_allow_html=True)
-                        chosen_laps = st.multiselect(
-                            f"Giri da mediare",
-                            options=d_laps['LapNumber'].astype(int).tolist(),
-                            default=valid_opts,
-                            format_func=lambda x: f"L{x} - {lap_times_dict.get(x, 0):.3f}s",
-                            key=f"avg_tel_laps_{driver}",
-                            label_visibility="collapsed"
-                        )
-                        if chosen_laps:
-                            selected_laps_data[driver] = d_laps[d_laps['LapNumber'].isin(chosen_laps)]
-
-        if selected_laps_data:
+            # --- SEZIONE TELEMETRIA MEDIA SOTTO LA TABELLA ---
             st.markdown("---")
-            sel_ch_avg = st.multiselect("Canali da mediare", ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear'], default=['Speed', 'Throttle', 'Brake'])
+            st.markdown("### 📈 Telemetria Media dei Giri Selezionati")
+            st.info("Calcola la media matematica esatta, metro per metro, di tutti i giri selezionati in alto.")
+            sel_ch_avg = st.multiselect("Canali da mediare", ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Acc_Smooth', 'PowerFactor'], default=['Speed', 'Throttle'], key="ch_sim_avg")
 
-            if sel_ch_avg:
-                with st.spinner("Allineamento e calcolo della media matematica della telemetria in corso..."):
-                    avg_plot_data = []
+            if st.button("🧮 CALCOLA TELEMETRIA MEDIA", key="btn_avg_sim"):
+                if sel_ch_avg:
+                    with st.spinner("Allineamento telemetria e calcolo della media matematica..."):
+                        avg_plot_data = []
+                        for driver, df_driver in selected_laps_data.items():
+                            all_telemetries = []
+                            best_lap_idx = df_driver['LapTimeSec'].idxmin()
+                            master_tel = get_telemetry_for_lap(df_driver.loc[best_lap_idx])
 
-                    for driver, df_driver in selected_laps_data.items():
-                        all_telemetries = []
-                        # Prendo il giro più veloce del gruppo come master per la griglia di distanza
-                        best_lap_idx = df_driver['LapTimeSec'].idxmin()
-                        master_tel = get_telemetry_for_lap(df_driver.loc[best_lap_idx])
+                            if not master_tel.empty:
+                                master_dist = master_tel['Distance'].values
 
-                        if not master_tel.empty:
-                            master_dist = master_tel['Distance'].values
+                                for _, row in df_driver.iterrows():
+                                    tel = get_telemetry_for_lap(row)
+                                    if not tel.empty:
+                                        comp_dist = tel['Distance'].values
+                                        _, unique_indices = np.unique(comp_dist, return_index=True)
+                                        comp_dist_u = comp_dist[unique_indices]
 
-                            for _, row in df_driver.iterrows():
-                                tel = get_telemetry_for_lap(row)
-                                if not tel.empty:
-                                    comp_dist = tel['Distance'].values
-                                    # Rimuove duplicati dalla distanza per l'interpolazione
-                                    _, unique_indices = np.unique(comp_dist, return_index=True)
-                                    comp_dist_u = comp_dist[unique_indices]
+                                        interp_channels = {}
+                                        for ch in sel_ch_avg:
+                                            if ch in tel.columns:
+                                                interp_ch = np.interp(master_dist, comp_dist_u, tel[ch].values[unique_indices])
+                                                interp_channels[ch] = interp_ch
+                                        all_telemetries.append(interp_channels)
 
-                                    interp_channels = {}
+                                if all_telemetries:
+                                    avg_channels = {}
                                     for ch in sel_ch_avg:
-                                        if ch in tel.columns:
-                                            # Interpolazione sul master_dist
-                                            interp_ch = np.interp(master_dist, comp_dist_u, tel[ch].values[unique_indices])
-                                            interp_channels[ch] = interp_ch
-                                    all_telemetries.append(interp_channels)
+                                        mat = np.array([t[ch] for t in all_telemetries if ch in t])
+                                        if mat.size > 0:
+                                            if ch == 'nGear':
+                                                avg_channels[ch] = np.round(np.mean(mat, axis=0))
+                                            else:
+                                                avg_channels[ch] = np.mean(mat, axis=0)
 
-                            if all_telemetries:
-                                avg_channels = {}
-                                for ch in sel_ch_avg:
-                                    # Stack e calcolo media lungo l'asse 0 per ogni canale
-                                    mat = np.array([t[ch] for t in all_telemetries if ch in t])
-                                    if mat.size > 0:
-                                        if ch == 'nGear':
-                                            # Per la marcia, arrotondiamo al numero intero
-                                            avg_channels[ch] = np.round(np.mean(mat, axis=0))
-                                        else:
-                                            avg_channels[ch] = np.mean(mat, axis=0)
+                                    avg_plot_data.append({
+                                        'driver': driver, 'dist': master_dist, 'channels': avg_channels,
+                                        'color': custom_colors.get(driver, '#FFF'), 'n_laps': len(all_telemetries)
+                                    })
 
-                                avg_plot_data.append({
-                                    'driver': driver,
-                                    'dist': master_dist,
-                                    'channels': avg_channels,
-                                    'color': custom_colors.get(driver, '#FFF'),
-                                    'n_laps': len(all_telemetries)
-                                })
+                        n_rows = len(sel_ch_avg)
+                        if n_rows > 0 and avg_plot_data:
+                            fig_avg = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+                            for idx_ch, ch in enumerate(sel_ch_avg):
+                                t_row = idx_ch + 1
+                                for idx_item, item in enumerate(avg_plot_data):
+                                    if ch in item['channels']:
+                                        label_name = f"{item['driver']} (Media {item['n_laps']} giri)"
+                                        fig_avg.add_trace(go.Scatter(
+                                            x=item['dist'], y=item['channels'][ch], mode='lines',
+                                            name=label_name, line=dict(color=item['color'], width=2.5),
+                                            legendgroup=item['driver'], showlegend=(idx_ch == 0)
+                                        ), row=t_row, col=1)
 
-                    n_rows = len(sel_ch_avg)
-                    if n_rows > 0 and avg_plot_data:
-                        fig_avg = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+                                        if ch == 'Speed':
+                                            peaks_idx, _ = signal.find_peaks(item['channels'][ch], distance=40, prominence=15)
+                                            valleys_idx, _ = signal.find_peaks(-item['channels'][ch], distance=40, prominence=15)
 
-                        for idx_ch, ch in enumerate(sel_ch_avg):
-                            t_row = idx_ch + 1
-                            for item in avg_plot_data:
-                                if ch in item['channels']:
-                                    label_name = f"{item['driver']} (Media {item['n_laps']} giri)"
-                                    fig_avg.add_trace(go.Scatter(
-                                        x=item['dist'],
-                                        y=item['channels'][ch],
-                                        mode='lines',
-                                        name=label_name,
-                                        line=dict(color=item['color'], width=2.5),
-                                        legendgroup=item['driver'],
-                                        showlegend=(idx_ch == 0)
-                                    ), row=t_row, col=1)
+                                            if len(peaks_idx) > 0:
+                                                drv_peak_x = item['dist'][peaks_idx]
+                                                drv_peak_y = item['channels'][ch][peaks_idx] + 8 + (idx_item * 14)
+                                                drv_peak_txt = [f"{int(v)}" for v in item['channels'][ch][peaks_idx]]
+                                                fig_avg.add_trace(go.Scatter(x=drv_peak_x, y=drv_peak_y, mode='text', text=drv_peak_txt, textposition='top center', showlegend=False, hoverinfo='skip', textfont=dict(color=item['color'], size=11, family="Roboto Mono")), row=t_row, col=1)
 
-                            units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'nGear': 'Gear'}
-                            fig_avg.update_yaxes(title_text=f"Avg {ch} [{units.get(ch, '')}]", row=t_row, col=1)
+                                            if len(valleys_idx) > 0:
+                                                drv_valley_x = item['dist'][valleys_idx]
+                                                drv_valley_y = item['channels'][ch][valleys_idx] - 8 - (idx_item * 14)
+                                                drv_valley_txt = [f"{int(v)}" for v in item['channels'][ch][valleys_idx]]
+                                                fig_avg.add_trace(go.Scatter(x=drv_valley_x, y=drv_valley_y, mode='text', text=drv_valley_txt, textposition='bottom center', showlegend=False, hoverinfo='skip', textfont=dict(color=item['color'], size=11, family="Roboto Mono")), row=t_row, col=1)
 
-                        fig_avg.update_layout(
-                            title=get_chart_title("Average Telemetry (Long Run)"),
-                            images=get_watermark(),
-                            height=250 * n_rows,
-                            template="plotly_dark", paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
-                            margin=dict(r=20, t=70), hovermode="x unified",
-                            legend=dict(orientation="h", y=1.02, x=0, xanchor="left", yanchor="bottom")
-                        )
-                        st.plotly_chart(fig_avg, use_container_width=True)
-                        st.info("💡 Questo grafico non mostra un giro reale, ma la media matematica esatta di tutti i giri selezionati. Ottimo per valutare il vero stile di guida a serbatoio pieno al netto di sbavature in singole curve.")
+                                units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'nGear': 'Gear', 'Acc_Smooth': 'm/s2', 'PowerFactor': 'W/kg'}
+                                fig_avg.update_yaxes(title_text=f"Avg {ch} [{units.get(ch, '')}]", row=t_row, col=1)
 
+                            fig_avg.update_layout(
+                                title=get_chart_title("Average Telemetry (Simulazione)"),
+                                images=get_watermark(), height=250 * n_rows, template="plotly_dark",
+                                paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f', margin=dict(r=20, t=70),
+                                hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0)
+                            )
+                            st.plotly_chart(fig_avg, use_container_width=True)
 
 # ==============================================================================
-# TOOL 17: PASSO GARA
+# TOOL 17: PASSO GARA E TELEMETRIA MEDIA
 # ==============================================================================
 elif tool == "PASSO GARA":
     st.subheader("🏎️ PASSO GARA (Analisi in Gara)")
-    st.markdown("Seleziona gli stint di gara. Vengono scartati automaticamente i giri di SC, VSC, Bandiera Rossa, l'ingresso/uscita dai box e il primo giro (L1).")
+    st.markdown("Vengono scartati automaticamente i giri di SC, VSC, Bandiera Rossa, l'ingresso/uscita dai box e il primo giro (L1).")
 
     if laps.empty:
         st.warning("Nessun dato cronometrico disponibile.")
     else:
-        show_labels = st.checkbox("Mostra tempi sui pallini", value=True)
-        selected_laps_data = {}
+        col_flags, col_radio = st.columns([1, 3])
+        with col_flags:
+            show_labels = st.checkbox("Mostra tempi sui pallini", value=True)
 
-        col_sel, _ = st.columns([1, 1])
+        stint_options = ["Tutta la gara"] + [f"Stint {i}" for i in range(1, 11)]
+        with col_radio:
+            selected_global_stint = st.radio("Seleziona Stint", options=stint_options, horizontal=True, key="pace_perf_stint_race")
+
+        selected_laps_data = {}
 
 
         def is_lap_green(status_str):
             if not isinstance(status_str, str): return True
-            # 4=SC, 5=Red Flag, 6=VSC, 7=VSC ending
             for bad_status in ['4', '5', '6', '7']:
-                if bad_status in status_str:
-                    return False
+                if bad_status in status_str: return False
             return True
 
 
-        with col_sel:
-            for driver in sel_drivers:
-                # Prendiamo i giri base, scartando quelli senza tempo o stint
-                d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec', 'Stint']).copy()
-                if d_laps.empty:
-                    continue
+        for driver in sel_drivers:
+            d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec', 'Stint']).copy()
+            if d_laps.empty: continue
 
-                stints_avail = d_laps['Stint'].unique().tolist()
-                stint_opts = ["Tutta la gara"] + [f"Stint {int(s)}" for s in stints_avail]
+            if selected_global_stint != "Tutta la gara":
+                target_stint_num = int(selected_global_stint.split(" ")[1])
+                d_laps = d_laps[d_laps['Stint'] == target_stint_num]
 
-                with st.expander(f"⚙️ Selezione Stint - {driver}", expanded=True):
-                    chosen_stints_raw = st.multiselect(
-                        f"Stint da analizzare ({driver})",
-                        options=stint_opts,
-                        default=["Tutta la gara"],
-                        key=f"pg_stint_{driver}"
-                    )
+            d_laps_clean = d_laps[(d_laps['PitOutTime'].isnull()) & (d_laps['PitInTime'].isnull()) & (d_laps['LapNumber'] > 1)].copy()
+            if 'TrackStatus' in d_laps_clean.columns:
+                green_mask = d_laps_clean['TrackStatus'].apply(is_lap_green)
+                d_laps_clean = d_laps_clean[green_mask]
 
-                    if chosen_stints_raw:
-                        if "Tutta la gara" in chosen_stints_raw:
-                            valid_stints = stints_avail
-                        else:
-                            valid_stints = [int(s.split(" ")[1]) for s in chosen_stints_raw]
+            if not d_laps_clean.empty:
+                selected_laps_data[driver] = d_laps_clean
 
-                        # Filtra per stint selezionati
-                        d_laps_stint = d_laps[d_laps['Stint'].isin(valid_stints)].copy()
-
-                        # Filtro 1: Elimina giri di box in/out e il PRIMO GIRO (> 1)
-                        d_laps_clean = d_laps_stint[(d_laps_stint['PitOutTime'].isnull()) & (d_laps_stint['PitInTime'].isnull()) & (d_laps_stint['LapNumber'] > 1)].copy()
-
-                        # Filtro 2: Elimina SC/VSC controllando TrackStatus
-                        if 'TrackStatus' in d_laps_clean.columns:
-                            green_mask = d_laps_clean['TrackStatus'].apply(is_lap_green)
-                            d_laps_clean = d_laps_clean[green_mask]
-
-                        if not d_laps_clean.empty:
-                            selected_laps_data[driver] = d_laps_clean
-                        else:
-                            st.warning(f"Nessun giro valido trovato per {driver} negli stint selezionati (probabilmente solo giri lenti o SC).")
-
-        if selected_laps_data:
+        if not selected_laps_data:
+            st.warning(f"Nessun dato valido trovato per i piloti selezionati in {selected_global_stint}.")
+        else:
             st.markdown("---")
             st.markdown("#### Analisi Passo Medio")
 
@@ -2600,7 +2587,7 @@ elif tool == "PASSO GARA":
             max_y = df_avg['AvgTimeSec'].max() + 0.5
 
             fig_bar.update_layout(
-                title=get_chart_title("Passo Medio in Gara (Esclusi In/Out, SC, VSC)"),
+                title=get_chart_title(f"Passo Medio in Gara - {selected_global_stint}"),
                 images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
@@ -2642,7 +2629,7 @@ elif tool == "PASSO GARA":
                 ))
 
             fig_scatter.update_layout(
-                title=get_chart_title("Evoluzione Tempi e Utilizzo Mescole (Giro Assoluto)"),
+                title=get_chart_title(f"Evoluzione Tempi - {selected_global_stint}"),
                 images=get_watermark(),
                 template="plotly_dark",
                 paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f',
@@ -2662,6 +2649,94 @@ elif tool == "PASSO GARA":
                 best_time = df_driver['LapTimeSec'].min()
                 recap_data.append({'Pilota': driver, 'Giri Validi': len(df_driver), 'Passo Medio': f"{int(avg_time // 60)}:{avg_time % 60:06.3f}" if avg_time >= 60 else f"{avg_time:.3f}", 'Miglior Giro': f"{int(best_time // 60)}:{best_time % 60:06.3f}" if best_time >= 60 else f"{best_time:.3f}", 'Mescole': ", ".join([str(c) for c in df_driver['Compound'].dropna().unique()])})
             st.dataframe(pd.DataFrame(recap_data).style.set_properties(**{'background-color': '#1a1a1a', 'color': '#cccccc'}), use_container_width=True, hide_index=True)
+
+            # --- SEZIONE TELEMETRIA MEDIA SOTTO LA TABELLA ---
+            st.markdown("---")
+            st.markdown("### 📈 Telemetria Media del Passo Gara")
+            st.info("Calcola la media matematica, metro per metro, di tutti i giri filtrati per questo stint.")
+            sel_ch_avg_race = st.multiselect("Canali da mediare", ['Speed', 'Throttle', 'Brake', 'RPM', 'nGear', 'Acc_Smooth', 'PowerFactor'], default=['Speed', 'Throttle'], key="ch_race_avg")
+
+            if st.button("🧮 CALCOLA TELEMETRIA MEDIA", key="btn_avg_race"):
+                if sel_ch_avg_race:
+                    with st.spinner("Allineamento telemetria e calcolo della media matematica..."):
+                        avg_plot_data = []
+                        for driver, df_driver in selected_laps_data.items():
+                            all_telemetries = []
+                            best_lap_idx = df_driver['LapTimeSec'].idxmin()
+                            master_tel = get_telemetry_for_lap(df_driver.loc[best_lap_idx])
+
+                            if not master_tel.empty:
+                                master_dist = master_tel['Distance'].values
+
+                                for _, row in df_driver.iterrows():
+                                    tel = get_telemetry_for_lap(row)
+                                    if not tel.empty:
+                                        comp_dist = tel['Distance'].values
+                                        _, unique_indices = np.unique(comp_dist, return_index=True)
+                                        comp_dist_u = comp_dist[unique_indices]
+
+                                        interp_channels = {}
+                                        for ch in sel_ch_avg_race:
+                                            if ch in tel.columns:
+                                                interp_ch = np.interp(master_dist, comp_dist_u, tel[ch].values[unique_indices])
+                                                interp_channels[ch] = interp_ch
+                                        all_telemetries.append(interp_channels)
+
+                                if all_telemetries:
+                                    avg_channels = {}
+                                    for ch in sel_ch_avg_race:
+                                        mat = np.array([t[ch] for t in all_telemetries if ch in t])
+                                        if mat.size > 0:
+                                            if ch == 'nGear':
+                                                avg_channels[ch] = np.round(np.mean(mat, axis=0))
+                                            else:
+                                                avg_channels[ch] = np.mean(mat, axis=0)
+
+                                    avg_plot_data.append({
+                                        'driver': driver, 'dist': master_dist, 'channels': avg_channels,
+                                        'color': custom_colors.get(driver, '#FFF'), 'n_laps': len(all_telemetries)
+                                    })
+
+                        n_rows = len(sel_ch_avg_race)
+                        if n_rows > 0 and avg_plot_data:
+                            fig_avg = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.05)
+                            for idx_ch, ch in enumerate(sel_ch_avg_race):
+                                t_row = idx_ch + 1
+                                for idx_item, item in enumerate(avg_plot_data):
+                                    if ch in item['channels']:
+                                        label_name = f"{item['driver']} (Media {item['n_laps']} giri)"
+                                        fig_avg.add_trace(go.Scatter(
+                                            x=item['dist'], y=item['channels'][ch], mode='lines',
+                                            name=label_name, line=dict(color=item['color'], width=2.5),
+                                            legendgroup=item['driver'], showlegend=(idx_ch == 0)
+                                        ), row=t_row, col=1)
+
+                                        if ch == 'Speed':
+                                            peaks_idx, _ = signal.find_peaks(item['channels'][ch], distance=40, prominence=15)
+                                            valleys_idx, _ = signal.find_peaks(-item['channels'][ch], distance=40, prominence=15)
+
+                                            if len(peaks_idx) > 0:
+                                                drv_peak_x = item['dist'][peaks_idx]
+                                                drv_peak_y = item['channels'][ch][peaks_idx] + 8 + (idx_item * 14)
+                                                drv_peak_txt = [f"{int(v)}" for v in item['channels'][ch][peaks_idx]]
+                                                fig_avg.add_trace(go.Scatter(x=drv_peak_x, y=drv_peak_y, mode='text', text=drv_peak_txt, textposition='top center', showlegend=False, hoverinfo='skip', textfont=dict(color=item['color'], size=11, family="Roboto Mono")), row=t_row, col=1)
+
+                                            if len(valleys_idx) > 0:
+                                                drv_valley_x = item['dist'][valleys_idx]
+                                                drv_valley_y = item['channels'][ch][valleys_idx] - 8 - (idx_item * 14)
+                                                drv_valley_txt = [f"{int(v)}" for v in item['channels'][ch][valleys_idx]]
+                                                fig_avg.add_trace(go.Scatter(x=drv_valley_x, y=drv_valley_y, mode='text', text=drv_valley_txt, textposition='bottom center', showlegend=False, hoverinfo='skip', textfont=dict(color=item['color'], size=11, family="Roboto Mono")), row=t_row, col=1)
+
+                                units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'nGear': 'Gear', 'Acc_Smooth': 'm/s2', 'PowerFactor': 'W/kg'}
+                                fig_avg.update_yaxes(title_text=f"Avg {ch} [{units.get(ch, '')}]", row=t_row, col=1)
+
+                            fig_avg.update_layout(
+                                title=get_chart_title(f"Average Telemetry ({selected_global_stint})"),
+                                images=get_watermark(), height=250 * n_rows, template="plotly_dark",
+                                paper_bgcolor='#0f0f0f', plot_bgcolor='#0f0f0f', margin=dict(r=20, t=70),
+                                hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0)
+                            )
+                            st.plotly_chart(fig_avg, use_container_width=True)
 
 
 # ==============================================================================
