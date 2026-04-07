@@ -448,7 +448,9 @@ with st.sidebar:
         "PASSO GARA",
         "RACE TRACE",
         "MICROSECTORS MAP",
-        "TELEMETRY DIFF SESSION"
+        "TELEMETRY DIFF SESSION",
+
+        "G-G-V 3D"
     ])
 
     st.header("3. DRIVERS")
@@ -616,21 +618,28 @@ if tool == "TELEMETRIA PRO":
             with st.spinner("Elaborazione Telemetria, Delta e calcolo curve..."):
                 ref_tel = get_telemetry_for_lap(ref_lap)
 
-                if not ref_tel.empty:
+                if not ref_tel.empty and 'Speed' in ref_tel.columns:
+                    # FIX: Pulizia forzata dei NaN
+                    ref_tel['Distance'] = ref_tel['Distance'].ffill().bfill()
+                    ref_tel['Speed'] = ref_tel['Speed'].ffill().bfill()
+
                     ref_dist = ref_tel['Distance'].values
                     ref_time = ref_tel['Time'].dt.total_seconds().values
 
-                    ref_peaks_idx, _ = signal.find_peaks(ref_tel['Speed'], distance=40, prominence=15)
-                    ref_valleys_idx, _ = signal.find_peaks(-ref_tel['Speed'], distance=40, prominence=15)
+                    # Estrazione Peaks Sicura senza NaN
+                    speed_arr = ref_tel['Speed'].values
+                    ref_peaks_idx, _ = signal.find_peaks(speed_arr, distance=40, prominence=15)
+                    ref_valleys_idx, _ = signal.find_peaks(-speed_arr, distance=40, prominence=15)
 
-                    peak_x_list = ref_tel['Distance'].iloc[ref_peaks_idx].values
-                    valley_x_list = ref_tel['Distance'].iloc[ref_valleys_idx].values
+                    peak_x_list = ref_dist[ref_peaks_idx]
+                    valley_x_list = ref_dist[ref_valleys_idx]
 
                     for lap_key, info in selected_laps_dict.items():
                         comp_lap = info['lap']
                         comp_tel = get_telemetry_for_lap(comp_lap)
 
-                        if not comp_tel.empty:
+                        if not comp_tel.empty and 'Distance' in comp_tel.columns:
+                            comp_tel['Distance'] = comp_tel['Distance'].ffill().bfill()
                             is_ref = (lap_key == ref_key)
 
                             if is_ref:
@@ -638,10 +647,17 @@ if tool == "TELEMETRIA PRO":
                             else:
                                 comp_dist = comp_tel['Distance'].values
                                 comp_time = comp_tel['Time'].dt.total_seconds().values
-                                _, unique_indices = np.unique(comp_dist, return_index=True)
-                                comp_time_interp = np.interp(ref_dist, comp_dist[unique_indices],
-                                                             comp_time[unique_indices])
-                                delta_time = comp_time_interp - ref_time
+                                valid_mask = ~np.isnan(comp_dist) & ~np.isnan(comp_time)
+                                comp_dist_clean = comp_dist[valid_mask]
+                                comp_time_clean = comp_time[valid_mask]
+
+                                if len(comp_dist_clean) > 0:
+                                    _, unique_indices = np.unique(comp_dist_clean, return_index=True)
+                                    comp_time_interp = np.interp(ref_dist, comp_dist_clean[unique_indices],
+                                                                 comp_time_clean[unique_indices], left=np.nan, right=np.nan)
+                                    delta_time = comp_time_interp - ref_time
+                                else:
+                                    delta_time = np.zeros(len(ref_dist))
 
                             plot_data.append({
                                 'label': lap_key,
@@ -655,7 +671,7 @@ if tool == "TELEMETRIA PRO":
 
             n_rows = len(sel_ch) + (1 if show_delta else 0)
 
-            if n_rows > 0 and plot_data:
+            if plot_data and n_rows > 0:
                 fig = make_subplots(rows=n_rows, cols=1, shared_xaxes=True, vertical_spacing=0.05)
                 start_row_for_channels = 2 if show_delta else 1
 
@@ -693,16 +709,17 @@ if tool == "TELEMETRIA PRO":
                                     mask = (df['Distance'] > px - 50) & (df['Distance'] < px + 50)
                                     if mask.any():
                                         local_max = df[ch][mask].max()
-                                        drv_peak_x.append(px)
-                                        drv_peak_y.append(local_max + 8 + (idx * 14))
-                                        drv_peak_txt.append(f"{int(local_max)}")
+                                        if pd.notna(local_max):
+                                            drv_peak_x.append(px)
+                                            drv_peak_y.append(local_max + 8 + (idx * 14))
+                                            drv_peak_txt.append(f"{int(local_max)}")
 
                                 if drv_peak_x:
                                     fig.add_trace(go.Scatter(
                                         x=drv_peak_x, y=drv_peak_y, mode='text',
                                         text=drv_peak_txt, textposition='top center',
                                         showlegend=False, hoverinfo='skip',
-                                        textfont=dict(color=item['color'], size=11, family="Impact") # FONT IMPACT AGGIUNTO
+                                        textfont=dict(color=item['color'], size=11, family="Impact")
                                     ), row=target_row, col=1)
 
                                 drv_valley_x, drv_valley_y, drv_valley_txt = [], [], []
@@ -710,20 +727,21 @@ if tool == "TELEMETRIA PRO":
                                     mask = (df['Distance'] > vx - 50) & (df['Distance'] < vx + 50)
                                     if mask.any():
                                         local_min = df[ch][mask].min()
-                                        drv_valley_x.append(vx)
-                                        drv_valley_y.append(local_min - 8 - (idx * 14))
-                                        drv_valley_txt.append(f"{int(local_min)}")
+                                        if pd.notna(local_min):
+                                            drv_valley_x.append(vx)
+                                            drv_valley_y.append(local_min - 8 - (idx * 14))
+                                            drv_valley_txt.append(f"{int(local_min)}")
 
                                 if drv_valley_x:
                                     fig.add_trace(go.Scatter(
                                         x=drv_valley_x, y=drv_valley_y, mode='text',
                                         text=drv_valley_txt, textposition='bottom center',
                                         showlegend=False, hoverinfo='skip',
-                                        textfont=dict(color=item['color'], size=11, family="Impact") # FONT IMPACT AGGIUNTO
+                                        textfont=dict(color=item['color'], size=11, family="Impact")
                                     ), row=target_row, col=1)
 
                             if idx == 0:
-                                units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'PowerFactor': 'W/kg'}
+                                units = {'Speed': 'km/h', 'Throttle': '%', 'Brake': '%', 'RPM': 'rpm', 'PowerFactor': 'W/kg', 'nGear': 'Gear'}
                                 fig.update_yaxes(title_text=f"{ch} [{units.get(ch, '')}]", row=target_row, col=1)
 
                 t_title_tel = get_chart_title("Telemetria Pro")
@@ -731,11 +749,110 @@ if tool == "TELEMETRIA PRO":
                 fig.update_layout(
                     height=250 * n_rows,
                     margin=dict(r=20, t=70), hovermode="x unified",
-                    legend=dict(orientation="h", y=1.2, x=0, xanchor="left", yanchor="bottom",font = dict(size=16, family="Impact"))
+                    legend=dict(orientation="h", y=1.02, x=0, xanchor="left", yanchor="bottom")
                 )
                 st.plotly_chart(fig, use_container_width=True, config=get_plotly_config(t_title_tel))
-                # font = dict(size=22, family="Impact")
+            else:
+                st.error("⚠️ **Errore Dati FIA:** La telemetria del server F1 per i giri selezionati risulta vuota o interrotta.")
 
+        # ==========================================================
+        # ESPORTAZIONE EXCEL CON RAGGRUPPAMENTO (+)
+        # ==========================================================
+        st.markdown("---")
+        st.markdown("### 💾 Esportazione Telemetria Completa (Excel)")
+        st.info("Esporta la telemetria di TUTTI i giri validi per TUTTI I PILOTI della sessione.")
+
+        if st.button("📥 ESPORTA TELEMETRIA COMPLETA IN EXCEL", type="primary"):
+            with st.spinner("Estrazione ed elaborazione telemetria in corso..."):
+                output = io.BytesIO()
+
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    workbook = writer.book
+                    header_format = workbook.add_format({'bold': True, 'bg_color': '#111111', 'font_color': 'white'})
+                    lap_title_format = workbook.add_format({'bold': True, 'bg_color': '#FF2800', 'font_color': 'white'})
+
+                    all_drivers_session = sorted(laps['Driver'].dropna().unique())
+
+                    for driver in all_drivers_session:
+                        d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec']).sort_values('LapNumber')
+                        if d_laps.empty: continue
+
+                        driver_data_list = []
+                        lap_ranges = []
+                        current_row_idx = 1
+
+                        for _, lap_row in d_laps.iterrows():
+                            try:
+                                tel = get_telemetry_for_lap(lap_row)
+                            except:
+                                continue
+
+                            if tel.empty: continue
+
+                            # Precalcoli accelerazioni
+                            if 'X' in tel.columns and 'Y' in tel.columns and 'Speed' in tel.columns:
+                                v_ms = tel['Speed'] / 3.6
+                                dx, dy = tel['X'].diff().fillna(0), tel['Y'].diff().fillna(0)
+                                dt = tel['Time'].dt.total_seconds().diff().fillna(0.1)
+                                theta = np.unwrap(np.arctan2(dy, dx))
+                                yaw_rate = np.gradient(theta, dt)
+                                tel['Ay'] = (v_ms * yaw_rate) / 9.81
+                                tel['Ax'] = (tel['Acc_Smooth'] / 9.81) if 'Acc_Smooth' in tel.columns else 0
+
+                            lap_n, lap_t = int(lap_row['LapNumber']), lap_row['LapTimeSec']
+                            time_str = f"{int(lap_t // 60)}:{lap_t % 60:06.3f}" if lap_t >= 60 else f"{lap_t:.3f}"
+
+                            driver_data_list.append({
+                                'Giro': f"GIRO {lap_n} - Tempo: {time_str}",
+                                'Distance': '', 'Speed': '', 'RPM': '', 'Gear': '',
+                                'Brake': '', 'Throttle': '', 'Ax (G)': '', 'Ay (G)': '', 'Energy (PowerFactor)': ''
+                            })
+
+                            for i in range(len(tel)):
+                                driver_data_list.append({
+                                    'Giro': '',
+                                    'Distance': round(tel['Distance'].iloc[i], 2),
+                                    'Speed': int(tel['Speed'].iloc[i]),
+                                    'RPM': int(tel['RPM'].iloc[i]) if 'RPM' in tel.columns else '',
+                                    'Gear': int(tel['nGear'].iloc[i]) if 'nGear' in tel.columns else '',
+                                    'Brake': int(tel['Brake'].iloc[i]) if 'Brake' in tel.columns else '',
+                                    'Throttle': int(tel['Throttle'].iloc[i]) if 'Throttle' in tel.columns else '',
+                                    'Ax (G)': round(tel['Ax'].iloc[i], 2) if 'Ax' in tel.columns else '',
+                                    'Ay (G)': round(tel['Ay'].iloc[i], 2) if 'Ay' in tel.columns else '',
+                                    'Energy (PowerFactor)': round(tel['PowerFactor'].iloc[i], 2) if 'PowerFactor' in tel.columns else ''
+                                })
+
+                            lap_ranges.append({'title_row': current_row_idx, 'start': current_row_idx + 1, 'end': current_row_idx + len(tel)})
+                            current_row_idx += 1 + len(tel)
+
+                        if not driver_data_list: continue
+
+                        df_export = pd.DataFrame(driver_data_list)
+                        df_export.to_excel(writer, sheet_name=driver, index=False)
+                        worksheet = writer.sheets[driver]
+
+                        for col_num, value in enumerate(df_export.columns.values):
+                            worksheet.write(0, col_num, value, header_format)
+                            worksheet.set_column(col_num, col_num, 15)
+                        worksheet.set_column(0, 0, 30)
+
+                        for r_info in lap_ranges:
+                            worksheet.set_row(r_info['title_row'], None, lap_title_format)
+                            for row_idx in range(r_info['start'], r_info['end'] + 1):
+                                worksheet.set_row(row_idx, None, None, {'level': 1, 'hidden': True})
+
+                output.seek(0)
+                # MODIFICA: Nome file con dicitura "22_drivers"
+                dl_filename_excel = generate_filename(sel_year, event_name_for_api, is_test, test_number, sel_session_display, "TELEMETRY_FULL", ["22_drivers"]).replace('.png', '.xlsx')
+
+            st.success("✅ Estrazione completata!")
+            st.download_button(
+                label="📥 SCARICA FOGLIO EXCEL (.xlsx)",
+                data=output,
+                file_name=dl_filename_excel,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 # ==============================================================================
 # TOOL 2: PACE PERFORMANCE
 # ==============================================================================
@@ -2955,6 +3072,88 @@ elif tool == "PASSO GARA":
                 recap_data.append({'Pilota': driver, 'Giri Validi': len(df_driver), 'Passo Medio': f"{int(avg_time // 60)}:{avg_time % 60:06.3f}" if avg_time >= 60 else f"{avg_time:.3f}", 'Miglior Giro': f"{int(best_time // 60)}:{best_time % 60:06.3f}" if best_time >= 60 else f"{best_time:.3f}", 'Mescole': ", ".join([str(c) for c in df_driver['Compound'].dropna().unique()])})
             st.dataframe(pd.DataFrame(recap_data).style.set_properties(**{'background-color': '#1a1a1a', 'color': '#cccccc'}), use_container_width=True, hide_index=True)
 
+            # ==========================================================
+            # NUOVA FUNZIONE: ESPORTAZIONE EXCEL STINT PER PILOTA
+            # ==========================================================
+            st.markdown("---")
+            st.markdown("### 💾 Esportazione Tempi per Stint (Excel)")
+            st.info("Scarica un foglio Excel contenente tutti i tempi validi (SC e Box esclusi) organizzati per Stint, incolonnati per ciascun pilota selezionato.")
+
+            # Utilizziamo la variabile `selected_laps_data` che contiene già i giri "verdi" puliti
+            # Creiamo un DataFrame finale
+
+            all_drivers_list = list(selected_laps_data.keys())
+
+            # Se ci sono dati
+            if all_drivers_list:
+                # Trova il massimo numero di stint tra tutti i piloti
+                max_stint = 1
+                for drv in all_drivers_list:
+                    if not selected_laps_data[drv].empty:
+                        drv_max_stint = selected_laps_data[drv]['Stint'].max()
+                        if pd.notna(drv_max_stint) and drv_max_stint > max_stint:
+                            max_stint = int(drv_max_stint)
+
+                # Dizionario per accumulare le colonne
+                excel_columns = {drv: [] for drv in all_drivers_list}
+
+                for s_num in range(1, max_stint + 1):
+                    # Aggiungi riga separatore
+                    for drv in all_drivers_list:
+                        excel_columns[drv].append(f"--- STINT {s_num} ---")
+
+                    # Trova il numero massimo di giri per questo stint tra tutti i piloti (per pareggiare la lunghezza)
+                    max_laps_in_this_stint = 0
+                    drv_stint_laps = {}
+
+                    for drv in all_drivers_list:
+                        df_drv = selected_laps_data[drv]
+                        if not df_drv.empty:
+                            laps_stint = df_drv[df_drv['Stint'] == s_num]['LapTimeSec'].values
+                        else:
+                            laps_stint = []
+
+                        drv_stint_laps[drv] = laps_stint
+                        if len(laps_stint) > max_laps_in_this_stint:
+                            max_laps_in_this_stint = len(laps_stint)
+
+                    # Popola le liste riempiendo con stringhe vuote i piloti che hanno fatto meno giri nello stint
+                    for i in range(max_laps_in_this_stint):
+                        for drv in all_drivers_list:
+                            if i < len(drv_stint_laps[drv]):
+                                # Converte in formato M:SS.ms
+                                t_sec = drv_stint_laps[drv][i]
+                                m = int(t_sec // 60)
+                                s = t_sec % 60
+                                time_str = f"{m}:{s:06.3f}" if m > 0 else f"{s:.3f}"
+                                excel_columns[drv].append(time_str)
+                            else:
+                                excel_columns[drv].append("")
+
+                # Crea il DataFrame da esportare
+                df_export = pd.DataFrame(excel_columns)
+
+                # Converti DataFrame in Excel in memoria (BytesIO)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name='Race Pace')
+
+                    # Adatta la larghezza delle colonne
+                    worksheet = writer.sheets['Race Pace']
+                    for idx, col in enumerate(df_export.columns):
+                        worksheet.set_column(idx, idx, 15)
+
+                output.seek(0)
+
+                dl_filename_excel = generate_filename(sel_year, event_name_for_api, is_test, test_number, sel_session_display, "RACE_PACE_STINTS", sel_drivers).replace('.png', '.xlsx')
+                st.download_button(
+                    label="📥 SCARICA FOGLIO EXCEL (.xlsx)",
+                    data=output,
+                    file_name=dl_filename_excel,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+
             # --- SEZIONE TELEMETRIA MEDIA SOTTO LA TABELLA ---
             st.markdown("---")
             st.markdown("### 📈 Telemetria Media del Passo Gara")
@@ -3039,7 +3238,6 @@ elif tool == "PASSO GARA":
                             fig_avg = apply_hd_layout(fig_avg, t_title_avg)
                             fig_avg.update_layout(height=250 * n_rows, margin=dict(r=20, t=70), hovermode="x unified", legend=dict(orientation="h", y=1.02, x=0))
                             st.plotly_chart(fig_avg, use_container_width=True, config=get_plotly_config(t_title_avg))
-
 
 # ==============================================================================
 # TOOL 17: MICROSECTORS MAP
@@ -3240,3 +3438,164 @@ elif tool == "RACE TRACE":
         st.plotly_chart(fig_trace, use_container_width=True, config=get_plotly_config(t_title_trace))
 
         st.info("💡 **Come leggere il Race Trace:** Il grafico ha l'asse Y invertito per comodità visiva. Se la linea sale (verso l'alto), il pilota sta guadagnando tempo sul target impostato (è più veloce). Se la linea scende, sta perdendo terreno (es. usura gomme). I grossi cali verticali rappresentano i Pit-Stop o fasi di Safety Car.")
+
+# ==============================================================================
+# TOOL 19: G-G-V 3D
+# ==============================================================================
+elif tool == "G-G-V 3D":
+    st.subheader("🌋 G-G-V 3D (Friction Craters)")
+    st.markdown(
+        "Analisi tridimensionale dell'aderenza. \n\n"
+        "**Asse X:** G Laterale | **Asse Y:** G Longitudinale | **Asse Z:** Velocità (km/h)."
+    )
+
+    col_sel, col_plot = st.columns([1.5, 4])
+    selected_laps_ggv = []
+
+    with col_sel:
+        st.markdown(
+            "<div style='background:#111; padding:10px; border-radius:5px; border-left:3px solid #FF2800; font-family: Impact;'><b>IMPOSTAZIONI</b></div>",
+            unsafe_allow_html=True)
+        st.write("")
+
+        analisi_mode = st.radio("Modalità di Analisi", ["Singolo Giro (Migliore)"], help="Il GGV 3D è molto pesante graficamente, si consiglia l'uso su un singolo giro per pilota.")
+        show_volume = st.checkbox("🧊 Mostra Volumi di Aderenza (Mesh 3D)", value=True, help="Avvolge i punti in un volume tridimensionale per vedere chiaramente quale pilota spinge i limiti più all'esterno.")
+
+        st.markdown("---")
+        st.markdown("#### Selezione Giri")
+
+        for driver in sel_drivers:
+            d_laps = laps[laps['Driver'] == driver].dropna(subset=['LapTimeSec'])
+            if not d_laps.empty:
+                fastest_idx = d_laps['LapTimeSec'].idxmin()
+                best_lap_num = d_laps.loc[fastest_idx, 'LapNumber']
+                col_drv = custom_colors.get(driver, "#FFF")
+                opts = d_laps[['LapNumber', 'LapTimeSec']].values.tolist()
+                def_opt_idx = next((i for i, opt in enumerate(opts) if opt[0] == best_lap_num), 0)
+
+                st.markdown(f"<span style='color:{col_drv}; font-weight:bold; font-family: Impact;'>{driver}</span>", unsafe_allow_html=True)
+                sel_lap_info = st.selectbox(f"Giro {driver}", opts, index=def_opt_idx,
+                                            format_func=lambda x: f"L{int(x[0])} - {x[1]:.3f}s",
+                                            key=f"ggv_lap_{driver}", label_visibility="collapsed")
+
+                target_lap = d_laps[d_laps['LapNumber'] == sel_lap_info[0]].iloc[0]
+                selected_laps_ggv.append(
+                    {'Driver': driver, 'Lap': str(int(sel_lap_info[0])), 'lap_obj': target_lap, 'color': col_drv})
+
+    with col_plot:
+        if selected_laps_ggv:
+            with st.spinner("Calcolo dinamica 3D ed estrazione dei volumi limite..."):
+                fig_ggv = go.Figure()
+
+                for item in selected_laps_ggv:
+                    try:
+                        tel = get_telemetry_for_lap(item['lap_obj'])
+                        if not tel.empty and 'X' in tel.columns:
+                            # 1. Pulizia e allineamento base
+                            tel = tel.copy()
+                            tel['Distance'] = tel['Distance'].ffill().bfill()
+                            tel['Speed'] = tel['Speed'].ffill().bfill()
+                            tel['X'] = tel['X'].ffill().bfill()
+                            tel['Y'] = tel['Y'].ffill().bfill()
+
+                            time_sec = tel['Time'].dt.total_seconds()
+                            dt = time_sec.diff().fillna(0.1)
+
+                            # 2. G Longitudinale
+                            if 'Acc_Smooth' in tel.columns:
+                                g_long = tel['Acc_Smooth'] / 9.81
+                            else:
+                                g_long = (tel['Speed'] / 3.6).diff().fillna(0) / dt / 9.81
+
+                            # 3. G Laterale (con smoothing e allineamento index corretto)
+                            v_ms = tel['Speed'] / 3.6
+                            smooth_x = tel['X'].rolling(window=5, center=True, min_periods=1).mean()
+                            smooth_y = tel['Y'].rolling(window=5, center=True, min_periods=1).mean()
+                            dx = smooth_x.diff().fillna(0)
+                            dy = smooth_y.diff().fillna(0)
+
+                            theta = np.arctan2(dy, dx)
+                            d_theta = np.unwrap(theta)
+
+                            # FIX: Aggiunto index=tel.index per prevenire mismatch di lunghezza!
+                            yaw_rate = pd.Series(d_theta, index=tel.index).diff().fillna(0) / dt
+                            lat_acc_ms2 = v_ms * yaw_rate
+
+                            g_lat_raw = lat_acc_ms2 / 9.81
+                            g_lat_med = g_lat_raw.rolling(window=5, center=True, min_periods=1).median()
+                            g_lat = g_lat_med.rolling(window=15, center=True, min_periods=1).mean().fillna(0)
+
+                            # 4. Asse Z: Velocità Assoluta
+                            z_speed = tel['Speed']
+
+                            # 5. Creazione DataFrame (Senza .values, affida a Pandas l'allineamento)
+                            df_plot = pd.DataFrame({
+                                'g_lat': g_lat,
+                                'g_long': g_long,
+                                'z_speed': z_speed
+                            }).dropna()  # Elimina le righe vuote in modo sicuro
+
+                            # 6. Maschera per scartare glitch GPS/fisici oltre i 6.5G
+                            mask = (df_plot['g_lat'].abs() <= 6.5) & (df_plot['g_long'].abs() <= 6.5)
+                            df_clean = df_plot[mask]
+
+                            if len(df_clean) > 10:
+                                # 7A. Aggiunta traccia punti 3D (Scatter)
+                                fig_ggv.add_trace(go.Scatter3d(
+                                    x=df_clean['g_lat'],
+                                    y=df_clean['g_long'],
+                                    z=df_clean['z_speed'],
+                                    mode='markers',
+                                    marker=dict(
+                                        size=2.5,
+                                        color=item['color'],
+                                        opacity=0.8,
+                                        line=dict(width=0)
+                                    ),
+                                    name=f"{item['Driver']} L{item['Lap']}"
+                                ))
+
+                                # 7B. Aggiunta traccia Volume (Mesh3D) per mostrare l'inviluppo
+                                if show_volume:
+                                    fig_ggv.add_trace(go.Mesh3d(
+                                        x=df_clean['g_lat'],
+                                        y=df_clean['g_long'],
+                                        z=df_clean['z_speed'],
+                                        color=item['color'],
+                                        opacity=0.15,
+                                        alphahull=0,
+                                        name=f"Limite {item['Driver']}",
+                                        showlegend=False,
+                                        hoverinfo='skip'
+                                    ))
+
+                    except Exception as e:
+                        st.error(f"Errore elaborazione dati per {item['Driver']}: {e}")
+
+                # Configurazione layout 3D in HD
+                t_title_ggv = get_chart_title("G-G-V 3D Analysis")
+                fig_ggv = apply_hd_layout(fig_ggv, t_title_ggv)
+
+                fig_ggv.update_layout(
+                    scene=dict(
+                        xaxis_title='G Laterale',
+                        yaxis_title='G Longitudinale',
+                        zaxis_title='Velocità (km/h)',
+                        xaxis=dict(range=[-6, 6], gridcolor='#333', zerolinecolor='#FF2800', zerolinewidth=2),
+                        yaxis=dict(range=[-6, 6], gridcolor='#333', zerolinecolor='#FF2800', zerolinewidth=2),
+                        zaxis=dict(range=[0, 360], gridcolor='#333', zerolinecolor='#FF2800', zerolinewidth=2),
+                        bgcolor='#0f0f0f'
+                    ),
+                    height=800,
+                    margin=dict(l=0, r=0, t=100, b=0),
+                    legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center", font=dict(family="Impact"))
+                )
+
+                st.plotly_chart(fig_ggv, use_container_width=True, config=get_plotly_config(t_title_ggv))
+
+                st.info(
+                    "💡 **Come leggere il GGV 3D:**\n"
+                    "- **L'asse Z ora è la velocità.** Più si sale, più l'auto va veloce.\n"
+                    "- **Forma a Imbuto/Cratere:** Noterai che ad alte velocità il cerchio si allarga (più carico aerodinamico = auto più incollata a terra, in grado di generare più G laterali e frenate più violente).\n"
+                    "- **Confronto Piloti:** Con l'opzione 'Mesh 3D' attiva, guarda dove un colore sporge rispetto all'altro. Se un colore sporge verso il basso (Y negativo), quel pilota sta frenando più tardi e più forte. Se sporge di lato, sta portando più velocità a centro curva."
+                )
