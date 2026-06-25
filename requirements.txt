@@ -3,7 +3,7 @@ pandas
 numpy<2.0.0
 scipy
 plotly
-fastf1
+fastf1>=3.4.0
 matplotlib
 xlsxwriter
 Pillow
