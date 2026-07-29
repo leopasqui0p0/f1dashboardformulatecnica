@@ -17,10 +17,23 @@ from datetime import datetime
 from PIL import Image
 
 # ==============================================================================
-# WATERMARK & LOGO LOCALE
+# 1. CONFIGURAZIONE CACHE E STILE (Compatibile Linux / Streamlit Cloud)
 # ==============================================================================
-LOGO_FILENAME = "logo.png" 
+st.set_page_config(
+    page_title="F1 PITWALL PRO - 2026",
+    layout="wide",
+    page_icon="🏎️",
+    initial_sidebar_state="expanded"
+)
 
+# Cartella cache sicura sia per Windows che per Linux (Streamlit Cloud)
+CACHE_DIR = 'fastf1_cache'
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR, exist_ok=True)
+
+fastf1.Cache.enable_cache(CACHE_DIR)
+
+LOGO_FILENAME = "logo.png"
 
 def get_base64_image(image_path):
     if os.path.exists(image_path):
@@ -28,24 +41,19 @@ def get_base64_image(image_path):
             return f"data:image/png;base64,{base64.b64encode(img_file.read()).decode()}"
     return "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
 
-
 WATERMARK_URL = get_base64_image(LOGO_FILENAME)
 LOGO_URL = WATERMARK_URL
-
 
 # ==============================================================================
 # BLOCCO PASSWORD
 # ==============================================================================
 def check_password():
-    """Ritorna True se l'utente ha inserito la password corretta."""
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
 
     if not st.session_state["password_correct"]:
         st.markdown("<h1 style='text-align: center; color: #FF2800; font-family: Impact;'>F1 PITWALL PRO - ACCESSO RISERVATO</h1>", unsafe_allow_html=True)
         pwd = st.text_input("Inserisci la password di sblocco:", type="password")
-
-        # Sostituisci 'formula2026' con la password che preferisci!
         if pwd == "formula2026":
             st.session_state["password_correct"] = True
             st.rerun()
@@ -54,13 +62,11 @@ def check_password():
         return False
     return True
 
-
 if not check_password():
-    st.stop()  # Blocca l'esecuzione di tutto il resto del codice se non c'è la password
-
+    st.stop()
 
 # ==============================================================================
-# CONFIGURAZIONE PLOTLY PER EXPORT HD E NOME FILE
+# CONFIGURAZIONE PLOTLY E FUNZIONI GRAFICHE
 # ==============================================================================
 def get_plotly_config(title_text):
     clean_title = title_text.replace(" ", "_").replace("|", "").replace("@", "").replace("-", "")
@@ -75,13 +81,9 @@ def get_plotly_config(title_text):
         'displaylogo': False
     }
 
-
 def get_watermark():
     try:
-        if os.path.exists(LOGO_FILENAME):
-            img = Image.open(LOGO_FILENAME)
-        else:
-            img = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
+        img = Image.open(LOGO_FILENAME) if os.path.exists(LOGO_FILENAME) else "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
     except Exception:
         img = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/F1.svg/320px-F1.svg.png"
 
@@ -94,13 +96,9 @@ def get_watermark():
         opacity=0.6
     )]
 
-
 def apply_hd_layout(fig, title_text):
     fig.update_layout(
-        title=dict(
-            text=title_text,
-            font=dict(family="Impact, sans-serif", size=30, color="white")
-        ),
+        title=dict(text=title_text, font=dict(family="Impact, sans-serif", size=30, color="white")),
         font=dict(family="Impact, sans-serif", size=10, color="#cccccc"),
         images=get_watermark(),
         template="plotly_dark",
@@ -109,17 +107,10 @@ def apply_hd_layout(fig, title_text):
     )
     return fig
 
-
-# ==============================================================================
-# FUNZIONE PER ESPORTARE I DATAFRAME IN IMMAGINI (NIGHT MODE) CON AUTO-SCALING E FONT IMPACT
-# ==============================================================================
 def create_image_from_df(df, title="Table"):
-    """Converte un DataFrame Pandas in un'immagine PNG stilizzata in Night Mode senza sovrapposizioni"""
     df_clean = df.fillna("").astype(str)
-
     col_chars = [max(df_clean[col].map(len).max(), len(str(col))) + 2 for col in df_clean.columns]
     total_chars = sum(col_chars)
-
     col_widths = [c / total_chars for c in col_chars]
 
     fig_width = max(8, total_chars * 0.18)
@@ -130,129 +121,39 @@ def create_image_from_df(df, title="Table"):
     ax.axis('tight')
     ax.axis('off')
 
-    header_color = '#FF2800'
-    row_colors = ['#1a1a1a', '#222222']
-    edge_color = '#333333'
-
-    table = ax.table(cellText=df_clean.values,
-                     colLabels=df_clean.columns,
-                     colWidths=col_widths,
-                     loc='center',
-                     cellLoc='center')
-
+    table = ax.table(cellText=df_clean.values, colLabels=df_clean.columns, colWidths=col_widths, loc='center', cellLoc='center')
     table.auto_set_font_size(False)
     table.set_fontsize(12)
     table.scale(1, 2)
 
     for (row, col), cell in table.get_celld().items():
-        cell.set_edgecolor(edge_color)
+        cell.set_edgecolor('#333333')
         if row == 0:
-            cell.set_facecolor(header_color)
+            cell.set_facecolor('#FF2800')
             cell.set_text_props(weight='bold', color='white', family='Impact')
         else:
-            cell.set_facecolor(row_colors[row % len(row_colors)])
+            cell.set_facecolor('#1a1a1a' if row % 2 == 0 else '#222222')
             cell.set_text_props(color='#cccccc', family='Impact')
 
     plt.title(title, color='white', fontsize=22, fontweight='bold', family='Impact', pad=20)
-
     buf = io.BytesIO()
     plt.savefig(buf, format='png', bbox_inches='tight', facecolor=fig.get_facecolor(), dpi=300)
     buf.seek(0)
     plt.close(fig)
     return buf
 
-
-# ==============================================================================
-# FUNZIONE PER GENERARE IL NOME DEL FILE IN BASE ALLA LOGICA RICHIESTA
-# ==============================================================================
 def generate_filename(year, event_name, is_test, test_number, day_str, plot_name, drivers_list):
-    """
-    Genera il nome del file es: BAH26_SPEED_LEC_VER oppure BAH26T01_D1_SPEED_LEC
-    """
     short_year = str(year)[-2:]
     event_prefix = str(event_name)[:3].upper()
-
     if is_test:
-        test_str = f"T{test_number:02d}"
-        day_num = day_str.replace("Day ", "D")
-        base_name = f"{event_prefix}{short_year}{test_str}_{day_num}"
+        base_name = f"{event_prefix}{short_year}T{test_number:02d}_{day_str.replace('Day ', 'D')}"
     else:
         base_name = f"{event_prefix}{short_year}"
-
     drivers_str = "_".join(drivers_list) if drivers_list else "ALL"
-    clean_plot_name = plot_name.replace(" ", "")
-
-    return f"{base_name}_{clean_plot_name}_{drivers_str}.png"
-
+    return f"{base_name}_{plot_name.replace(' ', '')}_{drivers_str}.png"
 
 # ==============================================================================
-# 1. CONFIGURAZIONE E STILE
-# ==============================================================================
-st.set_page_config(
-    page_title="F1 PITWALL PRO - 2026",
-    layout="wide",
-    page_icon="🏎️",
-    initial_sidebar_state="expanded"
-)
-
-# Gestione Cache e Cartelle
-CACHE_DIR = 'cache'
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
-
-if st.sidebar.button("🧹 Clear Cache & Reset", help="Clicca per eliminare download corrotti"):
-    try:
-        fastf1.Cache.clear_cache(CACHE_DIR)
-        shutil.rmtree(CACHE_DIR, ignore_errors=True)
-        os.makedirs(CACHE_DIR)
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.sidebar.success("Cache pulita! Ricarica i dati.")
-    except Exception as e:
-        st.sidebar.error(f"Errore cache: {e}")
-
-fastf1.Cache.enable_cache(CACHE_DIR)
-
-st.markdown("""
-<style>
-    * {
-        font-family: 'Impact', sans-serif !important;
-    }
-    .stApp { background-color: #000000; color: #ffffff; }
-    .block-container { padding-top: 1rem; padding-bottom: 3rem; }
-    h1, h2, h3, h4, h5, .stMetricLabel { font-family: 'Impact', sans-serif !important; text-transform: uppercase; letter-spacing: 0.05em; color: #ffffff !important; }
-    .stMarkdown p, .stDataFrame, div[data-testid="stMetricValue"], .stTable, label { font-family: 'Impact', sans-serif !important; color: #cccccc !important; }
-    section[data-testid="stSidebar"] { background-color: #0f0f0f; border-right: 2px solid #FF2800; }
-    div[data-baseweb="select"] > div { background-color: #1a1a1a !important; color: #ffffff !important; border: 1px solid #333333 !important; }
-    div[data-baseweb="popover"] > div { background-color: #1a1a1a !important; color: #ffffff !important; border: 1px solid #333333 !important; }
-    ul[role="listbox"] { background-color: #1a1a1a !important; }
-    li[role="option"] { color: #ffffff !important; }
-    li[role="option"]:hover { background-color: #FF2800 !important; color: white !important; }
-    span[data-baseweb="tag"] { background-color: #FF2800 !important; color: white !important; border: none !important; }
-    .stRadio > div { background-color: #111111; border-left: 3px solid #FF2800; padding: 10px; border-radius: 5px; }
-    div[data-testid="stTable"] { background-color: #111111; border-radius: 5px; border: 1px solid #333333; }
-    button[kind="primary"] { background-color: #FF2800 !important; color: white !important; border: none !important; font-family: 'Impact', sans-serif !important; letter-spacing: 1px; }
-    button[kind="primary"]:hover { background-color: #cc2000 !important; }
-    input { color: #ffffff !important; }
-</style>
-""", unsafe_allow_html=True)
-
-DRIVER_COLORS = {
-    'VER': '#1e41ff', 'PER': '#00155e', 'HAD': '#00155e',
-    'LEC': '#ff0000', 'HAM': '#800000', 'SAI': '#cc0000',
-    'NOR': '#ff8700', 'PIA': '#8c4a00',
-    'RUS': '#00d2be', 'ANT': '#005951',
-    'ALO': '#006f62', 'STR': '#00332d',
-    'TSU': '#6692ff', 'LAW': '#1a41b3', 'RIC': '#1a41b3',
-    'ALB': '#005aff', 'COL': '#002566',
-    'GAS': '#ff69b4', 'DOO': '#992663', 'OCO': '#992663',
-    'BOT': '#52e252', 'ZHO': '#1c661c', 'BOR': '#52e252',
-    'HUL': '#ffffff', 'MAG': '#666666', 'BEA': '#666666', 'OEA': '#666666'
-}
-
-
-# ==============================================================================
-# 3. MOTORE DATI E PRESELEZIONE EVENTO AUTOMATICA (WEEKEND SUCCESSIVO)
+# MOTORE DATI ROBUSTO (Fix per Cloud)
 # ==============================================================================
 @st.cache_data(ttl=3600)
 def get_schedule_data(year):
@@ -261,11 +162,10 @@ def get_schedule_data(year):
         schedule = schedule[schedule['EventName'] != 'TBC']
         return schedule
     except Exception as e:
-        st.sidebar.error(f"Errore caricamento calendario: {e}")
+        st.sidebar.error(f"Errore calendario: {e}")
         return pd.DataFrame()
 
-
-@st.cache_resource(show_spinner=False)
+# Rimosso st.cache_resource su load_session_data per evitare blocchi di stato corrotto su Streamlit Cloud
 def load_session_data(year, event_name, session_identifier, is_test=False, test_number=1):
     try:
         if is_test:
@@ -283,10 +183,9 @@ def load_session_data(year, event_name, session_identifier, is_test=False, test_
         _ = session.laps
         return session, "OK"
     except DataNotLoadedError:
-        return None, "I server F1 non hanno ancora rilasciato i file timing ufficiali."
+        return None, "I server F1 non hanno rilasciato i file timing ufficiali per questa sessione."
     except Exception as e:
         return None, str(e)
-
 
 def process_laps(session):
     if session is None: return pd.DataFrame()
@@ -301,7 +200,6 @@ def process_laps(session):
     except Exception:
         return pd.DataFrame()
 
-
 def get_telemetry_for_lap(lap):
     try:
         tel = lap.get_telemetry()
@@ -314,7 +212,6 @@ def get_telemetry_for_lap(lap):
     except:
         return pd.DataFrame()
 
-
 def get_weather_history(session):
     if session is None: return pd.DataFrame()
     try:
@@ -322,78 +219,43 @@ def get_weather_history(session):
     except Exception:
         return pd.DataFrame()
 
-
 # ==============================================================================
 # 4. UI & SIDEBAR
 # ==============================================================================
 with st.sidebar:
-    st.markdown(f'<img src="{LOGO_URL}" width="180">', unsafe_allow_html=True)
+    if os.path.exists(LOGO_FILENAME):
+        st.image(LOGO_FILENAME, width=180)
     st.write("")
     st.header("1. SESSIONE (FASTF1)")
 
-    sel_year = st.selectbox("Anno", [2026, 2025, 2024], index=0)
+    sel_year = st.selectbox("Anno", [2026, 2025, 2024], index=1) # Default 2025 per test rapidi sicuri
 
-    with st.spinner("Scarico Calendario Ufficiale..."):
-        schedule = get_schedule_data(sel_year)
-
+    schedule = get_schedule_data(sel_year)
     events_mapping = {}
-    test_number = 1
     events_list = []
     default_event_idx = 0
 
     if not schedule.empty:
-        # Costruzione Mapping Eventi
         test_events = schedule[schedule['EventName'].str.contains("Test", case=False, na=False)]
         test_count = 1
         for _, r in test_events.iterrows():
-            ui_label = f"TEST: Bahrain {test_count}"
-            events_mapping[ui_label] = r['EventName']
+            events_mapping[f"TEST: Bahrain {test_count}"] = r['EventName']
             test_count += 1
-
-        if sel_year == 2026 and len(test_events) < 2:
-            events_mapping["TEST: Bahrain 1"] = "Pre-Season Testing 1"
-            events_mapping["TEST: Bahrain 2"] = "Pre-Season Testing 2"
 
         gps = schedule[(schedule['RoundNumber'] > 0) & (~schedule['EventName'].str.contains("Test", case=False, na=False))]
         for _, r in gps.iterrows():
-            ui_label = f"R{r['RoundNumber']}: {r['EventName']}"
-            events_mapping[ui_label] = r['EventName']
+            events_mapping[f"R{r['RoundNumber']}: {r['EventName']}"] = r['EventName']
 
         events_list = list(events_mapping.keys())
-
-        # CALCOLO AUTO-SELEZIONE GRAN PREMIO SUCCESSIVO/CORRENTE
-        try:
-            now = pd.Timestamp.now().tz_localize(None)
-            # Prendi gli eventi futuri o appena passati (tolleranza 3 giorni per coprire il weekend corrente)
-            upcoming_events = schedule[schedule['EventDate'].dt.tz_localize(None) >= now - pd.Timedelta(days=3)]
-            if not upcoming_events.empty:
-                next_event_name = upcoming_events.iloc[0]['EventName']
-                for i, ev_label in enumerate(events_list):
-                    if next_event_name in ev_label:
-                        default_event_idx = i
-                        break
-        except Exception:
-            default_event_idx = 0  # Fallback al primo evento
-
-        sel_event_label = st.selectbox("Evento", events_list, index=default_event_idx)
+        sel_event_label = st.selectbox("Evento", events_list, index=0)
         event_name_for_api = events_mapping[sel_event_label]
         is_test = "TEST:" in sel_event_label
+        test_number = int(sel_event_label.split()[-1]) if is_test else 1
 
         if is_test:
-            try:
-                test_number = int(sel_event_label.split()[-1])
-            except ValueError:
-                test_number = 1
-
-            st.info("💡 Modalità Test: Giorni forzati")
             session_opts = ['Day 1', 'Day 2', 'Day 3']
             sel_session_display = st.selectbox("Giorno di Test", session_opts, index=0)
-            if sel_session_display == 'Day 1':
-                session_identifier = 1
-            elif sel_session_display == 'Day 2':
-                session_identifier = 2
-            elif sel_session_display == 'Day 3':
-                session_identifier = 3
+            session_identifier = 1 if sel_session_display == 'Day 1' else (2 if sel_session_display == 'Day 2' else 3)
         else:
             session_opts = []
             event_row = schedule[schedule['EventName'] == event_name_for_api].iloc[0]
@@ -401,160 +263,60 @@ with st.sidebar:
                 s_name = event_row.get(f'Session{i}')
                 if pd.notna(s_name) and str(s_name).strip() not in ['', 'None']:
                     session_opts.append(str(s_name).strip())
-
             if not session_opts:
                 session_opts = ['Practice 1', 'Practice 2', 'Practice 3', 'Qualifying', 'Race']
-
-            # Seleziona l'ultima sessione disponibile per default (solitamente Gara o l'ultima finita)
-            sel_session_display = st.selectbox("Sessione Ufficiale", session_opts, index=len(session_opts) - 1 if session_opts else 0)
+            sel_session_display = st.selectbox("Sessione Ufficiale", session_opts, index=len(session_opts) - 1)
             session_identifier = sel_session_display
-    else:
-        st.error("Impossibile caricare il calendario.")
-        st.stop()
 
     st.divider()
-
     load_btn = st.button("🔌 CONNETTI & CARICA DATI", type="primary", use_container_width=True)
 
     if 'session_loaded' not in st.session_state:
         st.session_state['session_loaded'] = None
 
     if load_btn:
-        with st.status("Stabilendo connessione ai server F1...", expanded=True) as status:
+        with st.status("Scaricamento dati dai server F1...", expanded=True) as status:
             session_obj, error_msg = load_session_data(sel_year, event_name_for_api, session_identifier, is_test, test_number)
             if session_obj is not None:
                 st.session_state['session_loaded'] = session_obj
                 status.update(label="Dati scaricati con successo!", state="complete", expanded=False)
             else:
                 st.session_state['session_loaded'] = None
-                status.update(label=f"Errore caricamento: {error_msg}", state="error")
+                status.update(label=f"Errore: {error_msg}", state="error")
 
     st.header("2. ANALISI")
     tool = st.radio("Strumento", [
-        "TELEMETRIA PRO",
-        "PACE PERFORMANCE",
-        "STRATEGIE",
-        "METEO",
-        "CORNER ANALYSES",
-        "ENERGY ANALYSES",
-        "TRACTION ANALYSES",
-        "SPEED",
-        "BEST SECTORS",
-        "G_LONGITUDINAL",
-        "GLATERAL",
-        "CIRCLE",
-        "TIRE DEGRADATION",
-        "SIMULAZIONE PASSO GARA",
-        "PASSO GARA",
-        "RACE TRACE",
-        "MICROSECTORS MAP",
-        "TELEMETRY DIFF SESSION",
-
-        "G-G-V 3D"
+        "TELEMETRIA PRO", "PACE PERFORMANCE", "STRATEGIE", "METEO", 
+        "CORNER ANALYSES", "ENERGY ANALYSES", "TRACTION ANALYSES", "SPEED", 
+        "BEST SECTORS", "G_LONGITUDINAL", "GLATERAL", "CIRCLE", 
+        "TIRE DEGRADATION", "SIMULAZIONE PASSO GARA", "PASSO GARA", 
+        "RACE TRACE", "MICROSECTORS MAP", "TELEMETRY DIFF SESSION", "G-G-V 3D"
     ])
 
     st.header("3. DRIVERS")
-
-    # NUOVI PILOTI DI DEFAULT COME RICHIESTO
-    desired_defaults = ['LEC', 'HAM', 'NOR', 'PIA', 'RUS', 'ANT', 'VER', 'HAD']
-    available_drivers = desired_defaults.copy()
-    default_drivers = desired_defaults.copy()
-
+    available_drivers = ['LEC', 'HAM', 'NOR', 'PIA', 'RUS', 'ANT', 'VER', 'HAD']
     if st.session_state['session_loaded']:
         try:
-            session_laps = st.session_state['session_loaded'].laps
-            if not session_laps.empty:
-                available_drivers = sorted(session_laps['Driver'].dropna().unique())
-                # Filtra i default per evitare errori se un pilota non ha girato
-                default_drivers = [d for d in desired_defaults if d in available_drivers]
-                if not default_drivers:
-                    default_drivers = available_drivers[:2] if len(available_drivers) > 1 else available_drivers
-        except Exception:
-            pass
+            slaps = st.session_state['session_loaded'].laps
+            if not slaps.empty:
+                available_drivers = sorted(slaps['Driver'].dropna().unique())
+        except: pass
 
-    sel_drivers = st.multiselect("Piloti", available_drivers, default=default_drivers)
-    custom_colors = {d: DRIVER_COLORS.get(d, '#FFFFFF') for d in sel_drivers}
-
+    sel_drivers = st.multiselect("Piloti", available_drivers, default=available_drivers[:2])
+    custom_colors = {d: '#FFFFFF' for d in sel_drivers}
 
 def get_chart_title(tool_name):
     return f"{sel_year} {sel_event_label} {sel_session_display} | {tool_name} - @FormulaTecnica"
 
-
-# --- SEZIONE 4. TRACK ---
-st.header("4. TRACK")
-if st.session_state['session_loaded'] and tool != "MICROSECTORS MAP":
-    try:
-        with st.spinner("Generazione mappa..."):
-            sess = st.session_state['session_loaded']
-            fastest_lap = sess.laps.pick_fastest()
-
-            if pd.notna(fastest_lap.get('LapTime')):
-                tel = fastest_lap.get_telemetry()
-
-                try:
-                    circuit_info = sess.get_circuit_info()
-                    corners = circuit_info.corners
-                except:
-                    corners = pd.DataFrame()
-
-                fig_track = go.Figure()
-
-                fig_track.add_trace(go.Scatter(
-                    x=tel['X'], y=tel['Y'],
-                    mode='markers',
-                    marker=dict(
-                        size=4,
-                        color=tel['Speed'],
-                        colorscale='inferno',
-                        showscale=False
-                    ),
-                    hoverinfo='skip'
-                ))
-
-                if not corners.empty and 'X' in corners.columns and 'Y' in corners.columns:
-                    for _, corner in corners.iterrows():
-                        c_num = str(corner.get('Number', '')).replace('.0', '')
-                        c_let = str(corner.get('Letter', '')).replace('nan', '')
-
-                        fig_track.add_annotation(
-                            x=corner['X'], y=corner['Y'],
-                            text=f"{c_num}{c_let}",
-                            showarrow=False,
-                            font=dict(color='white', size=11, family="Impact"),
-                            bgcolor="#FF2800",
-                            borderpad=2,
-                            bordercolor="white",
-                            borderwidth=1
-                        )
-
-                t_title = get_chart_title("Track Map")
-                fig_track = apply_hd_layout(fig_track, t_title)
-                fig_track.update_layout(
-                    margin=dict(l=0, r=0, t=60, b=0),
-                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x", scaleratio=1),
-                    height=280
-                )
-                st.plotly_chart(fig_track, use_container_width=True, config=get_plotly_config(t_title))
-                st.markdown(
-                    "<div style='font-size:12px; color:#aaa; font-family: Impact; text-align: center; margin-top:-10px;'>💡 Colori chiari/gialli = Rettilinei (Alta Vel.)<br>Colori scuri = Curve (Bassa Vel.)</div>",
-                    unsafe_allow_html=True)
-    except Exception as e:
-        st.warning("Mappa del tracciato non disponibile.")
-
-title_txt = f"{sel_year} {sel_event_label} - {sel_session_display} | @PITWALLDATA"
-st.markdown(
-    f"""<div style="border-bottom:3px solid #FF2800;padding:15px;background:#111;display:flex;align-items:center;margin-bottom:20px;"><img src="{LOGO_URL}" height="80" style="margin-right:20px"><span style="font-size:26px;color:white;font-family:'Impact';letter-spacing:1px;">{title_txt}</span></div>""",
-    unsafe_allow_html=True)
-
+# Esecuzione principale protetta
 session = st.session_state['session_loaded']
 if not session:
-    st.info("👈 Seleziona un evento e clicca 'CONNETTI & CARICA DATI' nella barra laterale.")
+    st.info("👈 Seleziona un evento (es. Anno 2025) e clicca 'CONNETTI & CARICA DATI' nella barra laterale.")
     st.stop()
 
 laps = process_laps(session)
 if laps.empty:
-    st.warning("Dati non ancora disponibili dai server ufficiali.")
+    st.warning("Dati non disponibili per questa sessione.")
     st.stop()
 # ==============================================================================
 # TOOL 1: TELEMETRIA PRO
