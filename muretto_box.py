@@ -19,7 +19,7 @@ from PIL import Image
 # ==============================================================================
 # WATERMARK & LOGO LOCALE
 # ==============================================================================
-LOGO_FILENAME = "logo.png"
+LOGO_FILENAME = "logo.png" 
 
 
 def get_base64_image(image_path):
