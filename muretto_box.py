@@ -283,9 +283,10 @@ def load_session_data(year, event_name, session_identifier, is_test=False, test_
         _ = session.laps
         return session, "OK"
     except DataNotLoadedError:
-        return None, "I server F1 non hanno ancora rilasciato i file timing ufficiali."
-    except Exception as e:
-        return None, str(e)
+        return None, "I server F1 non hanno ancora rilasciato i file timing ufficiali."
+    except Exception as e:
+        return None, str(e)
+
 
 def process_laps(session):
     if session is None: return pd.DataFrame()
