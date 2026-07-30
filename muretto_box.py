@@ -264,28 +264,25 @@ def get_schedule_data(year):
         st.sidebar.error(f"Errore caricamento calendario: {e}")
         return pd.DataFrame()
 
-
 @st.cache_resource(show_spinner=False)
 def load_session_data(year, event_name, session_identifier, is_test=False, test_number=1):
-    try:
-        if is_test:
-            session = fastf1.get_testing_session(year, test_number, session_identifier)
+    if is_test:
+        session = fastf1.get_testing_session(year, test_number, session_identifier)
+    else:
+        schedule = fastf1.get_event_schedule(year)
+        event_matches = schedule[schedule['EventName'] == event_name]
+        if not event_matches.empty:
+            exact_event = event_matches.iloc[0]
+            session = exact_event.get_session(session_identifier)
         else:
-            schedule = fastf1.get_event_schedule(year)
-            event_matches = schedule[schedule['EventName'] == event_name]
-            if not event_matches.empty:
-                exact_event = event_matches.iloc[0]
-                session = exact_event.get_session(session_identifier)
-            else:
-                session = fastf1.get_session(year, event_name, session_identifier)
+            session = fastf1.get_session(year, event_name, session_identifier)
 
-        session.load(telemetry=True, weather=True, messages=False)
-        _ = session.laps
-        return session, "OK"
-    except DataNotLoadedError:
-        return None, "I server F1 non hanno ancora rilasciato i file timing ufficiali."
-    except Exception as e:
-        return None, str(e)
+    session.load(telemetry=True, weather=True, messages=False)
+
+    if session.laps.empty:
+        raise DataNotLoadedError("Fetch completato ma nessun giro ricevuto dai server F1.")
+
+    return session
 
 
 def process_laps(session):
@@ -418,16 +415,21 @@ with st.sidebar:
 
     if 'session_loaded' not in st.session_state:
         st.session_state['session_loaded'] = None
-
+        
     if load_btn:
-        with st.status("Stabilendo connessione ai server F1...", expanded=True) as status:
-            session_obj, error_msg = load_session_data(sel_year, event_name_for_api, session_identifier, is_test, test_number)
-            if session_obj is not None:
-                st.session_state['session_loaded'] = session_obj
-                status.update(label="Dati scaricati con successo!", state="complete", expanded=False)
-            else:
-                st.session_state['session_loaded'] = None
-                status.update(label=f"Errore caricamento: {error_msg}", state="error")
+    with st.status("Stabilendo connessione ai server F1...", expanded=True) as status:
+        try:
+            session_obj = load_session_data(sel_year, event_name_for_api, session_identifier, is_test, test_number)
+            st.session_state['session_loaded'] = session_obj
+            status.update(label="Dati scaricati con successo!", state="complete", expanded=False)
+        except Exception as e:
+            st.session_state['session_loaded'] = None
+            import traceback
+            err_full = f"{type(e).__name__}: {e}"
+            status.update(label=f"Errore caricamento: {err_full}", state="error")
+            st.sidebar.code(traceback.format_exc())  # temporaneo, per vedere l'errore reale
+    
+    
 
     st.header("2. ANALISI")
     tool = st.radio("Strumento", [
