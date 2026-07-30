@@ -11,6 +11,8 @@ from fastf1.core import DataNotLoadedError
 import os
 import shutil
 import io
+import time
+import traceback
 import matplotlib.pyplot as plt
 import base64
 from datetime import datetime
@@ -264,25 +266,63 @@ def get_schedule_data(year):
         st.sidebar.error(f"Errore caricamento calendario: {e}")
         return pd.DataFrame()
 
+
+# ------------------------------------------------------------------------------
+# FIX IMPORTANTE:
+# Questa funzione ora SOLLEVA un'eccezione in caso di errore, invece di
+# "catturarla" e restituirla come valore (None, messaggio). Con
+# @st.cache_resource, un valore di ritorno viene sempre messo in cache -
+# INCLUSI i fallimenti mascherati da tupla (None, "errore"). Questo faceva sì
+# che un errore di rete temporaneo venisse "congelato" in cache: ogni click
+# successivo su "CONNETTI & CARICA DATI" restituiva istantaneamente lo stesso
+# errore vecchio, senza mai ritentare la connessione reale ai server F1.
+#
+# Sollevando un'eccezione invece di restituirla, Streamlit NON mette in cache
+# il fallimento: solo un caricamento riuscito (session valida con laps non
+# vuoti) viene salvato. Ogni tentativo fallito è quindi un vero nuovo tentativo
+# di rete, e in più viene ritentato automaticamente fino a 3 volte prima di
+# arrendersi, così i problemi di rete transitori si risolvono da soli.
+# ------------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def load_session_data(year, event_name, session_identifier, is_test=False, test_number=1):
-    if is_test:
-        session = fastf1.get_testing_session(year, test_number, session_identifier)
-    else:
-        schedule = fastf1.get_event_schedule(year)
-        event_matches = schedule[schedule['EventName'] == event_name]
-        if not event_matches.empty:
-            exact_event = event_matches.iloc[0]
-            session = exact_event.get_session(session_identifier)
-        else:
-            session = fastf1.get_session(year, event_name, session_identifier)
+def load_session_data(year, event_name, session_identifier, is_test=False, test_number=1, max_retries=3):
+    last_error = None
 
-    session.load(telemetry=True, weather=True, messages=False)
+    for attempt in range(1, max_retries + 1):
+        try:
+            if is_test:
+                session = fastf1.get_testing_session(year, test_number, session_identifier)
+            else:
+                schedule = fastf1.get_event_schedule(year)
+                event_matches = schedule[schedule['EventName'] == event_name]
+                if not event_matches.empty:
+                    exact_event = event_matches.iloc[0]
+                    session = exact_event.get_session(session_identifier)
+                else:
+                    session = fastf1.get_session(year, event_name, session_identifier)
 
-    if session.laps.empty:
-        raise DataNotLoadedError("Fetch completato ma nessun giro ricevuto dai server F1.")
+            session.load(telemetry=True, weather=True, messages=False)
 
-    return session
+            if session.laps is None or session.laps.empty:
+                raise DataNotLoadedError(
+                    "Il fetch è completato ma nessun giro è stato ricevuto dai server F1 "
+                    "(possibile blocco di rete, rate-limit o dati non ancora pubblicati)."
+                )
+
+            # Successo: questo è l'unico caso che viene messo in cache
+            return session
+
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                time.sleep(2 * attempt)  # backoff progressivo: 2s, 4s, ...
+                continue
+            # Ultimo tentativo fallito: solleviamo l'eccezione reale.
+            # Streamlit NON mette in cache un'eccezione, quindi il prossimo
+            # click ritenterà davvero la connessione da zero.
+            raise RuntimeError(
+                f"{type(last_error).__name__}: {last_error}\n\n"
+                f"(Falliti {max_retries} tentativi di connessione ai server F1)"
+            ) from last_error
 
 
 def process_laps(session):
@@ -415,21 +455,23 @@ with st.sidebar:
 
     if 'session_loaded' not in st.session_state:
         st.session_state['session_loaded'] = None
-        
+
     if load_btn:
-    with st.status("Stabilendo connessione ai server F1...", expanded=True) as status:
-        try:
-            session_obj = load_session_data(sel_year, event_name_for_api, session_identifier, is_test, test_number)
-            st.session_state['session_loaded'] = session_obj
-            status.update(label="Dati scaricati con successo!", state="complete", expanded=False)
-        except Exception as e:
-            st.session_state['session_loaded'] = None
-            import traceback
-            err_full = f"{type(e).__name__}: {e}"
-            status.update(label=f"Errore caricamento: {err_full}", state="error")
-            st.sidebar.code(traceback.format_exc())  # temporaneo, per vedere l'errore reale
-    
-    
+        with st.status("Stabilendo connessione ai server F1...", expanded=True) as status:
+            try:
+                session_obj = load_session_data(
+                    sel_year, event_name_for_api, session_identifier, is_test, test_number
+                )
+                st.session_state['session_loaded'] = session_obj
+                status.update(label="Dati scaricati con successo!", state="complete", expanded=False)
+            except Exception as e:
+                st.session_state['session_loaded'] = None
+                err_msg = str(e)
+                status.update(label=f"Errore caricamento: {err_msg.splitlines()[0]}", state="error")
+                # Mostra il traceback completo per capire la causa reale
+                # (rimuovi/commenta questo blocco una volta risolto il problema)
+                with st.expander("🔍 Dettagli errore (debug)"):
+                    st.code(err_msg)
 
     st.header("2. ANALISI")
     tool = st.radio("Strumento", [
@@ -2745,15 +2787,17 @@ elif tool == "TELEMETRY DIFF SESSION":
             sess_id_b = 1 if diff_sess_display == 'Day 1' else (2 if diff_sess_display == 'Day 2' else (3 if diff_sess_display == 'Day 3' else diff_sess_display))
 
             with st.spinner("Connessione ai server F1 in corso per la Sessione B..."):
-                sess_b_obj, err_b = load_session_data(diff_year, ev_name_b, sess_id_b, is_test_b, test_num_b)
-                if sess_b_obj is not None:
+                try:
+                    sess_b_obj = load_session_data(diff_year, ev_name_b, sess_id_b, is_test_b, test_num_b)
                     st.session_state['session_b_loaded'] = sess_b_obj
                     st.session_state['session_b_info'] = f"{diff_year} {diff_event_label} - {diff_sess_display}"
                     st.success("✔️ Sessione B scaricata ed in memoria!")
-                else:
+                except Exception as e:
                     st.session_state['session_b_loaded'] = None
                     st.session_state['session_b_info'] = ""
-                    st.error(f"Errore caricamento: {err_b}")
+                    st.error(f"Errore caricamento: {str(e).splitlines()[0]}")
+                    with st.expander("🔍 Dettagli errore (debug)"):
+                        st.code(str(e))
 
         if st.session_state.get('session_b_loaded'):
             st.info(f"💾 In Memoria: **{st.session_state['session_b_info']}**")
