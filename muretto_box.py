@@ -282,13 +282,10 @@ def load_session_data(year, event_name, session_identifier, is_test=False, test_
         session.load(telemetry=True, weather=True, messages=False)
         _ = session.laps
         return session, "OK"
-     except DataNotLoadedError as e:
-        return None, f"DataNotLoadedError: {e}"
-    except Exception as e:
-        import traceback
-        return None, f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
-        return None, str(e)
-
+    except DataNotLoadedError:
+        return None, "I server F1 non hanno ancora rilasciato i file timing ufficiali."
+    except Exception as e:
+        return None, str(e)
 
 def process_laps(session):
     if session is None: return pd.DataFrame()
