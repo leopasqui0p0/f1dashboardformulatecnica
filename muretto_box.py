@@ -10,6 +10,7 @@ import fastf1.plotting
 from fastf1.core import DataNotLoadedError
 import os
 import shutil
+import logging
 import io
 import matplotlib.pyplot as plt
 import base64
@@ -304,17 +305,34 @@ def _load_session_cached(year, event_name, session_identifier, is_test=False, te
     return session
 
 
+class _ListLogHandler(logging.Handler):
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.lines = []
+
+    def emit(self, record):
+        try:
+            self.lines.append(f"[{record.levelname}] {record.name}: {record.getMessage()}")
+        except Exception:
+            pass
+
+
 def load_session_data(year, event_name, session_identifier, is_test=False, test_number=1):
+    # Cattura i warning di FastF1 per mostrarli nell'app (utile online, dove non c'e' il terminale)
+    handler = _ListLogHandler()
+    ff1_logger = logging.getLogger("fastf1")
+    ff1_logger.addHandler(handler)
+    st.session_state['ff1_log'] = []
     try:
         return _load_session_cached(year, event_name, session_identifier, is_test, test_number), "OK"
     except DataNotLoadedError:
         return None, (f"FastF1 {fastf1.__version__} non e' riuscito a scaricare i giri. "
-                      "Da ottobre 2026 la F1 richiede il login F1TV: serve FastF1 3.9+ ('pip install -U fastf1') "
-                      "e un login valido ('python -m fastf1 auth f1tv --status'). Altre cause: "
-                      "connessione/firewall che blocca livetiming.formula1.com, oppure cache corrotta "
-                      "(premi Clear Cache & Reset). Guarda il terminale per il warning esatto di FastF1.")
+                      "Apri il riquadro 'Dettagli errore FastF1' qui sotto per il motivo preciso.")
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+    finally:
+        ff1_logger.removeHandler(handler)
+        st.session_state['ff1_log'] = handler.lines
 
 
 def process_laps(session):
@@ -458,7 +476,11 @@ with st.sidebar:
                 st.session_state['session_loaded'] = None
                 status.update(label=f"Errore caricamento: {error_msg}", state="error")
 
-    st.caption(f"FastF1 v{fastf1.__version__}")
+    st.caption(f"FastF1 v{fastf1.__version__} | Credenziali F1TV: "
+               f"{'impostate' if os.environ.get('F1_USERNAME') and os.environ.get('F1_PASSWORD') else 'MANCANTI'}")
+    if st.session_state.get('session_loaded') is None and st.session_state.get('ff1_log'):
+        with st.expander("Dettagli errore FastF1"):
+            st.code("\n".join(st.session_state['ff1_log'][-30:]))
     st.header("2. ANALISI")
     tool = st.radio("Strumento", [
         "TELEMETRIA PRO",
