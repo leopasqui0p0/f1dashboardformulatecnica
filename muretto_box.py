@@ -318,8 +318,13 @@ class _ListLogHandler(logging.Handler):
         try:
             msg = record.getMessage()
             low = (record.name + " " + msg).lower()
-            if record.levelno < logging.WARNING and not record.exc_info and not any(k in low for k in self.KEYWORDS):
+            is_net = any(k in record.name.lower() for k in ("auth", "req", "account"))
+            if record.levelno < logging.WARNING and not record.exc_info \
+                    and not (is_net and record.levelno >= logging.INFO) \
+                    and not any(k in low for k in self.KEYWORDS):
                 return
+            if "_add_first_lap_time_from_ergast" in str(record.exc_text or "") or "first lap time for driver" in msg:
+                return  # rumore: conseguenza dell'errore principale
             line = f"[{record.levelname}] {record.name}: {msg}"
             if record.exc_info:
                 tb = self._fmt.formatException(record.exc_info).strip().splitlines()
@@ -496,6 +501,27 @@ with st.sidebar:
     if st.session_state.get('session_loaded') is None and st.session_state.get('ff1_log'):
         with st.expander("Dettagli errore FastF1"):
             st.code("\n".join(st.session_state['ff1_log'][-40:]))
+    with st.expander("🔑 Diagnostica login F1TV"):
+        st.caption("Esegue i comandi di login di FastF1 sul server dove gira l'app.")
+        c_a, c_b = st.columns(2)
+        _cmd = None
+        if c_a.button("Stato login", use_container_width=True):
+            _cmd = "--status"
+        if c_b.button("Rifai login", use_container_width=True):
+            _cmd = "--authenticate"
+        if _cmd:
+            import subprocess, sys
+            try:
+                _r = subprocess.run([sys.executable, "-m", "fastf1", "auth", "f1tv", _cmd]
+                                    + (["--method", "password"] if _cmd == "--authenticate" else []),
+                                    input="", capture_output=True, text=True, timeout=90, env=os.environ.copy())
+                _out = (_r.stdout + "\n" + _r.stderr).strip() or f"(nessun output, codice {_r.returncode})"
+            except Exception as _e:
+                _out = f"{type(_e).__name__}: {_e}"
+            pwd_env = os.environ.get("F1_PASSWORD", "")
+            if pwd_env:
+                _out = _out.replace(pwd_env, "********")
+            st.code(_out[-3000:])
     st.header("2. ANALISI")
     tool = st.radio("Strumento", [
         "TELEMETRIA PRO",
