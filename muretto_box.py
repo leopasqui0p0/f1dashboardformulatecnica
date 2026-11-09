@@ -237,7 +237,7 @@ fastf1.Cache.enable_cache(CACHE_DIR)
 
 st.markdown("""
 <style>
-    * {
+    *:not([data-testid="stIconMaterial"]):not([class*="material-symbols"]):not([class*="material-icons"]) {
         font-family: 'Impact', sans-serif !important;
     }
     .stApp { background-color: #000000; color: #ffffff; }
@@ -306,13 +306,25 @@ def _load_session_cached(year, event_name, session_identifier, is_test=False, te
 
 
 class _ListLogHandler(logging.Handler):
+    """Raccoglie warning/errori di FastF1 + i traceback nascosti a livello DEBUG."""
+    KEYWORDS = ("auth", "login", "token", "401", "403", "429", "forbidden", "unauthor", "error", "exception")
+
     def __init__(self):
-        super().__init__(level=logging.WARNING)
+        super().__init__(level=logging.DEBUG)
         self.lines = []
+        self._fmt = logging.Formatter()
 
     def emit(self, record):
         try:
-            self.lines.append(f"[{record.levelname}] {record.name}: {record.getMessage()}")
+            msg = record.getMessage()
+            low = (record.name + " " + msg).lower()
+            if record.levelno < logging.WARNING and not record.exc_info and not any(k in low for k in self.KEYWORDS):
+                return
+            line = f"[{record.levelname}] {record.name}: {msg}"
+            if record.exc_info:
+                tb = self._fmt.formatException(record.exc_info).strip().splitlines()
+                line += "\n    " + "\n    ".join(tb[-6:])  # ultime righe del traceback
+            self.lines.append(line)
         except Exception:
             pass
 
@@ -321,6 +333,8 @@ def load_session_data(year, event_name, session_identifier, is_test=False, test_
     # Cattura i warning di FastF1 per mostrarli nell'app (utile online, dove non c'e' il terminale)
     handler = _ListLogHandler()
     ff1_logger = logging.getLogger("fastf1")
+    old_level = ff1_logger.level
+    ff1_logger.setLevel(logging.DEBUG)
     ff1_logger.addHandler(handler)
     st.session_state['ff1_log'] = []
     try:
@@ -332,6 +346,7 @@ def load_session_data(year, event_name, session_identifier, is_test=False, test_
         return None, f"{type(e).__name__}: {e}"
     finally:
         ff1_logger.removeHandler(handler)
+        ff1_logger.setLevel(old_level)
         st.session_state['ff1_log'] = handler.lines
 
 
@@ -480,7 +495,7 @@ with st.sidebar:
                f"{'impostate' if os.environ.get('F1_USERNAME') and os.environ.get('F1_PASSWORD') else 'MANCANTI'}")
     if st.session_state.get('session_loaded') is None and st.session_state.get('ff1_log'):
         with st.expander("Dettagli errore FastF1"):
-            st.code("\n".join(st.session_state['ff1_log'][-30:]))
+            st.code("\n".join(st.session_state['ff1_log'][-40:]))
     st.header("2. ANALISI")
     tool = st.radio("Strumento", [
         "TELEMETRIA PRO",
